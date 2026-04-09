@@ -1,0 +1,47 @@
+spring:
+  application:
+    name: service-discovery
+
+server:
+  port: 8761   # 8761 is the Eureka convention — clients default to this port
+
+eureka:
+  instance:
+    hostname: ${EUREKA_HOSTNAME:localhost}
+
+  client:
+    # This process IS the registry. It must not try to register itself as a
+    # client or fetch its own registry — that creates a circular dependency
+    # and fills the logs with self-registration warnings.
+    register-with-eureka: false
+    fetch-registry: false
+    service-url:
+      defaultZone: http://${eureka.instance.hostname}:${server.port}/eureka/
+
+  server:
+    # In production, self-preservation mode protects the registry from
+    # evicting healthy instances during a network partition — it assumes
+    # lost heartbeats are a network problem, not a service crash.
+    # In dev it just causes confusing "EMERGENCY" warnings when you stop
+    # a service locally, so we turn it off here.
+    enable-self-preservation: false
+
+    # How long (ms) to wait after startup before evicting instances that
+    # have not sent a heartbeat. Default is 60 s * 5 = 300 s, which means
+    # a stopped service stays "UP" in the registry for 5 minutes locally.
+    # Setting to 0 makes eviction immediate after the lease expires.
+    eviction-interval-timer-in-ms: 5000
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    com.netflix.eureka: WARN
+    com.netflix.discovery: WARN

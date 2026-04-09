@@ -1,0 +1,17 @@
+com\banking\userservice\dto\CreateUserRequest.class
+com\banking\userservice\entity\UserStatus.class
+com\banking\userservice\UserServiceApplication.class
+com\banking\userservice\repository\UserRepository.class
+com\banking\userservice\exception\ErrorResponse.class
+com\banking\userservice\exception\GlobalExceptionHandler.class
+com\banking\userservice\exception\EmailAlreadyExistsException.class
+com\banking\userservice\dto\UserResponse.class
+com\banking\userservice\config\OpenApiConfig.class
+com\banking\userservice\service\UserService.class
+com\banking\userservice\controller\UserController.class
+com\banking\userservice\dto\UpdateStatusRequest.class
+com\banking\userservice\entity\User.class
+com\banking\userservice\dto\UpdateProfileRequest.class
+com\banking\userservice\entity\User$UserBuilder.class
+com\banking\userservice\exception\UserNotFoundException.class
+com\banking\userservice\service\impl\UserServiceImpl.class

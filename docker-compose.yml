@@ -1,0 +1,198 @@
+services:
+
+  service-discovery:
+    build:
+      context: ./service-discovery
+    container_name: service-discovery
+    environment:
+      EUREKA_HOSTNAME: service-discovery
+    ports:
+      - "8761:8761"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8761/actuator/health | grep -q '\"status\":\"UP\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api-gateway:
+    build:
+      context: ./api-gateway
+    container_name: api-gateway
+    environment:
+      EUREKA_HOST: service-discovery
+    ports:
+      - "8080:8080"
+    depends_on:
+      service-discovery:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health | grep -q '\"status\":\"UP\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-users:
+    image: postgres:16-alpine
+    container_name: postgres-users
+    environment:
+      POSTGRES_DB: banking_users
+      POSTGRES_USER: banking_user
+      POSTGRES_PASSWORD: banking_pass
+    ports:
+      # host:container — only port 5432 is exposed to localhost.
+      # Other services will talk to this via the Docker network, not localhost.
+      - "5433:5432"
+    volumes:
+      # Named volume: data survives container restarts and 'docker compose down'.
+      # Use 'docker compose down -v' to also delete the volume (wipe data).
+      - postgres_users_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U banking_user -d banking_users"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  user-service:
+    build:
+      context: ./user-service
+    container_name: user-service
+    environment:
+      DB_HOST: postgres-users
+      DB_PORT: 5432
+      EUREKA_HOST: service-discovery
+    ports:
+      - "8081:8081"
+    depends_on:
+      postgres-users:
+        condition: service_healthy
+      service-discovery:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/actuator/health | grep -q '\"status\":\"UP\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-accounts:
+    image: postgres:16-alpine
+    container_name: postgres-accounts
+    environment:
+      POSTGRES_DB: banking_accounts
+      POSTGRES_USER: banking_user
+      POSTGRES_PASSWORD: banking_pass
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres_accounts_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U banking_user -d banking_accounts"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  account-service:
+    build:
+      context: ./account-service
+    container_name: account-service
+    environment:
+      DB_HOST: postgres-accounts
+      DB_PORT: 5432
+      EUREKA_HOST: service-discovery
+    ports:
+      - "8082:8082"
+    depends_on:
+      postgres-accounts:
+        condition: service_healthy
+      service-discovery:
+        condition: service_healthy
+      user-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8082/actuator/health | grep -q '\"status\":\"UP\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-transactions:
+    image: postgres:16-alpine
+    container_name: postgres-transactions
+    environment:
+      POSTGRES_DB: banking_transactions
+      POSTGRES_USER: banking_user
+      POSTGRES_PASSWORD: banking_pass
+    ports:
+      - "5435:5432"
+    volumes:
+      - postgres_transactions_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U banking_user -d banking_transactions"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  transaction-service:
+    build:
+      context: ./transaction-service
+    container_name: transaction-service
+    environment:
+      DB_HOST: postgres-transactions
+      DB_PORT: 5432
+      EUREKA_HOST: service-discovery
+    ports:
+      - "8083:8083"
+    depends_on:
+      postgres-transactions:
+        condition: service_healthy
+      service-discovery:
+        condition: service_healthy
+      account-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8083/actuator/health | grep -q '\"status\":\"UP\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-notifications:
+    image: postgres:16-alpine
+    container_name: postgres-notifications
+    environment:
+      POSTGRES_DB: banking_notifications
+      POSTGRES_USER: banking_user
+      POSTGRES_PASSWORD: banking_pass
+    ports:
+      - "5436:5432"
+    volumes:
+      - postgres_notifications_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U banking_user -d banking_notifications"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  notification-service:
+    build:
+      context: ./notification-service
+    container_name: notification-service
+    environment:
+      DB_HOST: postgres-notifications
+      DB_PORT: 5432
+      EUREKA_HOST: service-discovery
+    ports:
+      - "8084:8084"
+    depends_on:
+      postgres-notifications:
+        condition: service_healthy
+      service-discovery:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8084/actuator/health | grep -q '\"status\":\"UP\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_users_data:
+  postgres_accounts_data:
+  postgres_transactions_data:
+  postgres_notifications_data:

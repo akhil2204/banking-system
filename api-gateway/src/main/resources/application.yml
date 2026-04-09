@@ -1,0 +1,161 @@
+spring:
+  application:
+    name: api-gateway
+
+  cloud:
+    gateway:
+      discovery:
+        locator:
+          # false = explicit routes only. Auto-discovery would expose internal
+          # service names (lb://USER-SERVICE) as public paths — unacceptable.
+          enabled: false
+
+      # Global timeouts for every proxied request.
+      httpclient:
+        connect-timeout: 10000
+        response-timeout: 10s
+
+      routes:
+
+        # ------------------------------------------------------------------ #
+        # user-service                                                         #
+        # External: /v1/users/**  →  user-service: /users/**                 #
+        #                                                                      #
+        # RewritePath strips the /v1 prefix before forwarding so user-service #
+        # never needs to know about API versioning. When we build v2, we add  #
+        # a second route pointing to a v2 service, keeping v1 untouched.      #
+        # ------------------------------------------------------------------ #
+        - id: user-service-route
+          uri: lb://user-service
+          predicates:
+            - Path=/v1/users/**
+          filters:
+            - RewritePath=/v1/(?<remaining>.*), /${remaining}
+
+        # Dev convenience: forward Swagger UI through the gateway.
+        # Remove or restrict this in production.
+        - id: user-service-swagger-route
+          uri: lb://user-service
+          predicates:
+            - Path=/user-service/swagger-ui.html, /user-service/swagger-ui/**, /user-service/api-docs/**
+          filters:
+            - StripPrefix=1
+
+        - id: account-service-route
+          uri: lb://account-service
+          predicates:
+            - Path=/v1/accounts/**
+          filters:
+            - RewritePath=/v1/(?<remaining>.*), /${remaining}
+
+        - id: account-service-swagger-route
+          uri: lb://account-service
+          predicates:
+            - Path=/account-service/swagger-ui.html, /account-service/swagger-ui/**, /account-service/api-docs/**
+          filters:
+            - StripPrefix=1
+
+        - id: transaction-service-route
+          uri: lb://transaction-service
+          predicates:
+            - Path=/v1/transactions/**
+          filters:
+            - RewritePath=/v1/(?<remaining>.*), /${remaining}
+
+        - id: transaction-service-swagger-route
+          uri: lb://transaction-service
+          predicates:
+            - Path=/transaction-service/swagger-ui.html, /transaction-service/swagger-ui/**, /transaction-service/api-docs/**
+          filters:
+            - StripPrefix=1
+
+        - id: notification-service-route
+          uri: lb://notification-service
+          predicates:
+            - Path=/v1/notifications/**
+          filters:
+            - RewritePath=/v1/(?<remaining>.*), /${remaining}
+
+        - id: notification-service-swagger-route
+          uri: lb://notification-service
+          predicates:
+            - Path=/notification-service/swagger-ui.html, /notification-service/swagger-ui/**, /notification-service/api-docs/**
+          filters:
+            - StripPrefix=1
+
+  # Graceful shutdown: when the process receives SIGTERM, Spring stops accepting
+  # new requests immediately but waits up to 25 s for in-flight requests to
+  # complete before the JVM exits. Without this, a rolling deploy kills active
+  # requests mid-flight.
+  lifecycle:
+    timeout-per-shutdown-phase: 25s
+
+server:
+  port: 8080
+  shutdown: graceful
+  netty:
+    connection-timeout: 10000ms
+  compression:
+    enabled: true
+    min-response-size: 1024   # only compress responses larger than 1 KB
+
+eureka:
+  client:
+    service-url:
+      defaultZone: http://${EUREKA_HOST:localhost}:8761/eureka/
+  instance:
+    prefer-ip-address: true
+    instance-id: ${spring.application.name}:${server.port}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, gateway
+  endpoint:
+    health:
+      show-details: always
+      # Separate liveness and readiness probes for Kubernetes.
+      # /actuator/health/liveness  — is the process alive? (restart if not)
+      # /actuator/health/readiness — is the process ready to serve traffic? (remove from LB if not)
+      # Docker Compose ignores these but they cost nothing to enable now.
+      probes:
+        enabled: true
+  health:
+    livenessState:
+      enabled: true
+    readinessState:
+      enabled: true
+
+# Gateway has no API of its own — services provide their own Swagger UIs.
+# Disabling here prevents a confusing empty spec at /api-docs.
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+
+# --- DEFERRED: add when infrastructure is ready ----------------------------- #
+#
+# Rate limiting (needs Redis):
+#   spring.data.redis.host / port
+#   Add RequestRateLimiter filter per route
+#
+# Distributed tracing (needs Zipkin container in docker-compose):
+#   management.tracing.sampling.probability: 1.0
+#   management.zipkin.tracing.endpoint: http://zipkin:9411/api/v2/spans
+#
+# Prometheus metrics (needs Prometheus container + micrometer-registry-prometheus):
+#   management.endpoints.web.exposure.include: health, info, gateway, prometheus
+#   management.metrics.export.prometheus.enabled: true
+#
+# JWT validation filter (needs auth-service or shared secret):
+#   Add a custom GlobalFilter that validates Authorization header
+# --------------------------------------------------------------------------- #
+
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+  level:
+    org.springframework.cloud.gateway: INFO
+    com.banking: INFO

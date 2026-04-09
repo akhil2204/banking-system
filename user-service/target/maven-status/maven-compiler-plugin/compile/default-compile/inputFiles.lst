@@ -1,0 +1,16 @@
+C:\Users\RolexonRocks\Documents\Learning\claude\banking-system\user-service\src\main\java\com\banking\userservice\config\OpenApiConfig.java
+C:\Users\RolexonRocks\Documents\Learning\claude\banking-system\user-service\src\main\java\com\banking\userservice\controller\UserController.java
+C:\Users\RolexonRocks\Documents\Learning\claude\banking-system\user-service\src\main\java\com\banking\userservice\dto\CreateUserRequest.java
+C:\Users\RolexonRocks\Documents\Learning\claude\banking-system\user-service\src\main\java\com\banking\userservice\dto\UpdateProfileRequest.java
+C:\Users\RolexonRocks\Documents\Learning\claude\banking-system\user-service\src\main\java\com\banking\userservice\dto\UpdateStatusRequest.java
+C:\Users\RolexonRocks\Documents\Learning\claude\banking-system\user-service\src\main\java\com\banking\userservice\dto\UserResponse.java
+C:\Users\RolexonRocks\Documents\Learning\claude\banking-system\user-service\src\main\java\com\banking\userservice\entity\User.java
+C:\Users\RolexonRocks\Documents\Learning\claude\banking-system\user-service\src\main\java\com\banking\userservice\entity\UserStatus.java
+C:\Users\RolexonRocks\Documents\Learning\claude\banking-system\user-service\src\main\java\com\banking\userservice\exception\EmailAlreadyExistsException.java
+C:\Users\RolexonRocks\Documents\Learning\claude\banking-system\user-service\src\main\java\com\banking\userservice\exception\ErrorResponse.java
+C:\Users\RolexonRocks\Documents\Learning\claude\banking-system\user-service\src\main\java\com\banking\userservice\exception\GlobalExceptionHandler.java
+C:\Users\RolexonRocks\Documents\Learning\claude\banking-system\user-service\src\main\java\com\banking\userservice\exception\UserNotFoundException.java
+C:\Users\RolexonRocks\Documents\Learning\claude\banking-system\user-service\src\main\java\com\banking\userservice\repository\UserRepository.java
+C:\Users\RolexonRocks\Documents\Learning\claude\banking-system\user-service\src\main\java\com\banking\userservice\service\impl\UserServiceImpl.java
+C:\Users\RolexonRocks\Documents\Learning\claude\banking-system\user-service\src\main\java\com\banking\userservice\service\UserService.java
+C:\Users\RolexonRocks\Documents\Learning\claude\banking-system\user-service\src\main\java\com\banking\userservice\UserServiceApplication.java
