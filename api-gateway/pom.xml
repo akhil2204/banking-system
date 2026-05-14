@@ -13,6 +13,10 @@
     <artifactId>api-gateway</artifactId>
     <name>api-gateway</name>
 
+    <properties>
+        <jjwt.version>0.12.6</jjwt.version>
+    </properties>
+
     <dependencies>
         <!--
             spring-cloud-starter-gateway brings Spring WebFlux + Netty + the
@@ -43,6 +47,47 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
+        <!--
+            JJWT — validates JWT tokens in JwtAuthenticationFilter.
+            Gateway only VERIFIES (never signs), but still needs all three jars:
+              jjwt-api:     compile-time API (Jwts, Claims, JwtException)
+              jjwt-impl:    runtime parser and signature verification
+              jjwt-jackson: JSON deserialization of JWT claim maps
+        -->
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-api</artifactId>
+            <version>${jjwt.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-impl</artifactId>
+            <version>${jjwt.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-jackson</artifactId>
+            <version>${jjwt.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- Lombok for @Slf4j in JwtAuthenticationFilter -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-tracing-bridge-brave</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.zipkin.reporter2</groupId>
+            <artifactId>zipkin-reporter-brave</artifactId>
         </dependency>
     </dependencies>
 

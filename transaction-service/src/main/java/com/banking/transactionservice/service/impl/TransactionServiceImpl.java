@@ -1,7 +1,7 @@
 package com.banking.transactionservice.service.impl;
 
 import com.banking.transactionservice.client.AccountClient;
-import com.banking.transactionservice.client.NotificationClient;
+import com.banking.transactionservice.config.RabbitMQConfig;
 import com.banking.transactionservice.dto.*;
 import com.banking.transactionservice.entity.Transaction;
 import com.banking.transactionservice.entity.TransactionStatus;
@@ -10,6 +10,11 @@ import com.banking.transactionservice.exception.AccountNotAvailableException;
 import com.banking.transactionservice.exception.AccountServiceUnavailableException;
 import com.banking.transactionservice.exception.SelfTransferException;
 import com.banking.transactionservice.exception.TransactionNotFoundException;
+import com.banking.transactionservice.messaging.AuditEventPublisher;
+import com.banking.transactionservice.messaging.KafkaTopics;
+import com.banking.transactionservice.messaging.TransactionAuditEvent;
+import com.banking.transactionservice.messaging.TransactionEvent;
+import com.banking.transactionservice.messaging.TransactionEventPublisher;
 import com.banking.transactionservice.repository.TransactionRepository;
 import com.banking.transactionservice.service.TransactionService;
 import feign.FeignException;
@@ -29,7 +34,8 @@ public class TransactionServiceImpl implements TransactionService {
 
     private final TransactionRepository transactionRepository;
     private final AccountClient accountClient;
-    private final NotificationClient notificationClient;
+    private final TransactionEventPublisher eventPublisher;
+    private final AuditEventPublisher auditPublisher;
 
     @Override
     @Transactional
@@ -51,19 +57,20 @@ public class TransactionServiceImpl implements TransactionService {
             transaction.setCompletedAt(LocalDateTime.now());
             log.info("DEBIT completed: txn={} account={} amount={}", transaction.getId(), account.accountNumber(), request.amount());
             transactionRepository.save(transaction);
-            sendNotificationSilently(account.userId(), "TRANSACTION_COMPLETED",
-                    "Debit Successful",
+            publishNotification(account.userId(), transaction.getId(), "TRANSACTION_COMPLETED",
+                    RabbitMQConfig.ROUTING_COMPLETED, "Debit Successful",
                     String.format("%s debited from account %s", request.amount(), account.accountNumber()));
         } catch (FeignException | AccountServiceUnavailableException e) {
             transaction.setStatus(TransactionStatus.FAILED);
             transaction.setFailureReason(extractReason(e));
             log.warn("DEBIT failed: txn={} reason={}", transaction.getId(), transaction.getFailureReason());
             transactionRepository.save(transaction);
-            sendNotificationSilently(account.userId(), "TRANSACTION_FAILED",
-                    "Debit Failed",
+            publishNotification(account.userId(), transaction.getId(), "TRANSACTION_FAILED",
+                    RabbitMQConfig.ROUTING_FAILED, "Debit Failed",
                     String.format("Debit of %s from account %s failed", request.amount(), account.accountNumber()));
         }
 
+        publishTransactionAudit(transaction, account.userId());
         return TransactionResponse.from(transaction);
     }
 
@@ -87,8 +94,8 @@ public class TransactionServiceImpl implements TransactionService {
             transaction.setCompletedAt(LocalDateTime.now());
             log.info("CREDIT completed: txn={} account={} amount={}", transaction.getId(), account.accountNumber(), request.amount());
             transactionRepository.save(transaction);
-            sendNotificationSilently(account.userId(), "TRANSACTION_COMPLETED",
-                    "Credit Received",
+            publishNotification(account.userId(), transaction.getId(), "TRANSACTION_COMPLETED",
+                    RabbitMQConfig.ROUTING_COMPLETED, "Credit Received",
                     String.format("%s credited to account %s", request.amount(), account.accountNumber()));
         } catch (FeignException | AccountServiceUnavailableException e) {
             transaction.setStatus(TransactionStatus.FAILED);
@@ -97,6 +104,7 @@ public class TransactionServiceImpl implements TransactionService {
             transactionRepository.save(transaction);
         }
 
+        publishTransactionAudit(transaction, account.userId());
         return TransactionResponse.from(transaction);
     }
 
@@ -128,9 +136,10 @@ public class TransactionServiceImpl implements TransactionService {
             transaction.setFailureReason("Withdrawal from source failed: " + extractReason(e));
             log.warn("TRANSFER step-1 failed: txn={} source={}", transaction.getId(), source.accountNumber());
             transactionRepository.save(transaction);
-            sendNotificationSilently(source.userId(), "TRANSACTION_FAILED",
-                    "Transfer Failed",
+            publishNotification(source.userId(), transaction.getId(), "TRANSACTION_FAILED",
+                    RabbitMQConfig.ROUTING_FAILED, "Transfer Failed",
                     String.format("Transfer of %s from account %s failed", request.amount(), source.accountNumber()));
+            publishTransactionAudit(transaction, source.userId());
             return TransactionResponse.from(transaction);
         }
 
@@ -158,9 +167,10 @@ public class TransactionServiceImpl implements TransactionService {
                 log.error("TRANSFER compensation FAILED: txn={} MANUAL INTERVENTION REQUIRED", transaction.getId());
             }
             transactionRepository.save(transaction);
-            sendNotificationSilently(source.userId(), "TRANSACTION_FAILED",
-                    "Transfer Failed",
+            publishNotification(source.userId(), transaction.getId(), "TRANSACTION_FAILED",
+                    RabbitMQConfig.ROUTING_FAILED, "Transfer Failed",
                     String.format("Transfer of %s from account %s failed", request.amount(), source.accountNumber()));
+            publishTransactionAudit(transaction, source.userId());
             return TransactionResponse.from(transaction);
         }
 
@@ -171,13 +181,14 @@ public class TransactionServiceImpl implements TransactionService {
                 transaction.getId(), source.accountNumber(), target.accountNumber(), request.amount());
         transactionRepository.save(transaction);
 
-        sendNotificationSilently(source.userId(), "TRANSACTION_COMPLETED",
-                "Transfer Sent",
+        publishNotification(source.userId(), transaction.getId(), "TRANSACTION_COMPLETED",
+                RabbitMQConfig.ROUTING_COMPLETED, "Transfer Sent",
                 String.format("%s transferred from %s to %s", request.amount(), source.accountNumber(), target.accountNumber()));
-        sendNotificationSilently(target.userId(), "TRANSACTION_COMPLETED",
-                "Transfer Received",
+        publishNotification(target.userId(), transaction.getId(), "TRANSACTION_COMPLETED",
+                RabbitMQConfig.ROUTING_COMPLETED, "Transfer Received",
                 String.format("%s received in account %s from %s", request.amount(), target.accountNumber(), source.accountNumber()));
 
+        publishTransactionAudit(transaction, source.userId());
         return TransactionResponse.from(transaction);
     }
 
@@ -228,18 +239,40 @@ public class TransactionServiceImpl implements TransactionService {
     }
 
     /*
-     * Fire-and-forget notification. A failed notification must NEVER roll
-     * back or affect the transaction outcome — notifications are auxiliary.
-     * We catch Exception (not just FeignException) to guard against any
-     * unexpected failure inside the notification call.
+     * Publish an immutable audit record to Kafka after every terminal state.
+     * key = transactionId ensures ordering within the partition for this entity.
+     * userId is the account owner — may be null if account resolution failed.
      */
-    private void sendNotificationSilently(Long userId, String type, String title, String message) {
+    private void publishTransactionAudit(Transaction transaction, Long userId) {
+        TransactionAuditEvent event = new TransactionAuditEvent(
+                transaction.getId(),
+                transaction.getSourceAccountId(),
+                transaction.getTargetAccountId(),
+                userId,
+                transaction.getType().name(),
+                transaction.getAmount(),
+                transaction.getStatus().name(),
+                transaction.getDescription(),
+                transaction.getFailureReason(),
+                transaction.getCompletedAt() != null ? transaction.getCompletedAt() : transaction.getCreatedAt()
+        );
+        auditPublisher.publish(KafkaTopics.AUDIT_TRANSACTIONS, String.valueOf(transaction.getId()), event);
+    }
+
+    /*
+     * Publish a notification event to RabbitMQ.
+     * Fire-and-forget: the publisher catches all exceptions internally so
+     * a broker outage never rolls back or delays the transaction response.
+     * notification-service consumes the event asynchronously in its own time.
+     */
+    private void publishNotification(Long userId, Long transactionId,
+                                     String type, String routingKey,
+                                     String title, String message) {
         if (userId == null) return;
-        try {
-            notificationClient.send(new NotificationRequest(userId, type, "IN_APP", title, message));
-        } catch (Exception e) {
-            log.warn("Notification send failed (non-critical): userId={} type={} error={}", userId, type, e.getMessage());
-        }
+        eventPublisher.publish(
+                new TransactionEvent(transactionId, userId, type, "IN_APP", title, message),
+                routingKey
+        );
     }
 
     /*

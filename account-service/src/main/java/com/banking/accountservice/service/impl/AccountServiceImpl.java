@@ -5,6 +5,9 @@ import com.banking.accountservice.dto.*;
 import com.banking.accountservice.entity.Account;
 import com.banking.accountservice.entity.AccountStatus;
 import com.banking.accountservice.exception.*;
+import com.banking.accountservice.messaging.AccountAuditEvent;
+import com.banking.accountservice.messaging.AuditEventPublisher;
+import com.banking.accountservice.messaging.KafkaTopics;
 import com.banking.accountservice.repository.AccountRepository;
 import com.banking.accountservice.service.AccountService;
 import feign.FeignException;
@@ -14,6 +17,8 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.UUID;
 
 @Service
@@ -22,6 +27,7 @@ public class AccountServiceImpl implements AccountService {
 
     private final AccountRepository accountRepository;
     private final UserClient userClient;
+    private final AuditEventPublisher auditPublisher;
 
     @Override
     @Transactional
@@ -48,7 +54,11 @@ public class AccountServiceImpl implements AccountService {
                 .type(request.type())
                 .build();
 
-        return AccountResponse.from(accountRepository.save(account));
+        AccountResponse saved = AccountResponse.from(accountRepository.save(account));
+        auditPublisher.publish(KafkaTopics.AUDIT_ACCOUNTS, String.valueOf(saved.id()),
+                new AccountAuditEvent(saved.id(), saved.accountNumber(), saved.userId(),
+                        "CREATED", null, saved.status().name(), null, saved.balance(), LocalDateTime.now()));
+        return saved;
     }
 
     @Override
@@ -94,29 +104,30 @@ public class AccountServiceImpl implements AccountService {
     @Transactional
     public AccountResponse deposit(Long id, DepositRequest request) {
         Account account = requireActiveAccount(id);
-        /*
-         * BigDecimal.add() returns a new instance — it does not mutate.
-         * Always assign the result back: balance = balance.add(amount).
-         */
+        BigDecimal previousBalance = account.getBalance();
         account.setBalance(account.getBalance().add(request.amount()));
-        return AccountResponse.from(accountRepository.save(account));
+        AccountResponse saved = AccountResponse.from(accountRepository.save(account));
+        auditPublisher.publish(KafkaTopics.AUDIT_ACCOUNTS, String.valueOf(id),
+                new AccountAuditEvent(id, saved.accountNumber(), saved.userId(),
+                        "DEPOSITED", null, null, previousBalance, saved.balance(), LocalDateTime.now()));
+        return saved;
     }
 
     @Override
     @Transactional
     public AccountResponse withdraw(Long id, WithdrawRequest request) {
         Account account = requireActiveAccount(id);
-        /*
-         * compareTo is the correct way to compare BigDecimal values.
-         * equals() also checks scale: 1.0.equals(1.00) is false.
-         * compareTo() only compares numeric value: 1.0.compareTo(1.00) == 0.
-         */
         if (account.getBalance().compareTo(request.amount()) < 0) {
             throw new InsufficientFundsException(
                     account.getAccountNumber(), request.amount(), account.getBalance());
         }
+        BigDecimal previousBalance = account.getBalance();
         account.setBalance(account.getBalance().subtract(request.amount()));
-        return AccountResponse.from(accountRepository.save(account));
+        AccountResponse saved = AccountResponse.from(accountRepository.save(account));
+        auditPublisher.publish(KafkaTopics.AUDIT_ACCOUNTS, String.valueOf(id),
+                new AccountAuditEvent(id, saved.accountNumber(), saved.userId(),
+                        "WITHDRAWN", null, null, previousBalance, saved.balance(), LocalDateTime.now()));
+        return saved;
     }
 
     @Override
@@ -124,8 +135,13 @@ public class AccountServiceImpl implements AccountService {
     public AccountResponse updateStatus(Long id, UpdateAccountStatusRequest request) {
         Account account = accountRepository.findById(id)
                 .orElseThrow(() -> new AccountNotFoundException(id));
+        String previousStatus = account.getStatus().name();
         account.setStatus(request.status());
-        return AccountResponse.from(accountRepository.save(account));
+        AccountResponse saved = AccountResponse.from(accountRepository.save(account));
+        auditPublisher.publish(KafkaTopics.AUDIT_ACCOUNTS, String.valueOf(id),
+                new AccountAuditEvent(id, saved.accountNumber(), saved.userId(),
+                        "STATUS_CHANGED", previousStatus, saved.status().name(), null, null, LocalDateTime.now()));
+        return saved;
     }
 
     @Override
@@ -133,8 +149,12 @@ public class AccountServiceImpl implements AccountService {
     public void closeAccount(Long id) {
         Account account = accountRepository.findById(id)
                 .orElseThrow(() -> new AccountNotFoundException(id));
+        String previousStatus = account.getStatus().name();
         account.setStatus(AccountStatus.CLOSED);
         accountRepository.save(account);
+        auditPublisher.publish(KafkaTopics.AUDIT_ACCOUNTS, String.valueOf(id),
+                new AccountAuditEvent(id, account.getAccountNumber(), account.getUserId(),
+                        "CLOSED", previousStatus, AccountStatus.CLOSED.name(), null, null, LocalDateTime.now()));
     }
 
     // ------------------------------------------------------------------ //

@@ -1,35 +1,201 @@
 {
   "info": {
     "name": "Banking System — Complete API Collection",
-    "description": "Full Postman collection for the Banking Microservices System.\n\nBase URL: http://localhost:8080 (API Gateway)\n\nFlow to test:\n1. Create a user\n2. Open accounts (two accounts for transfer testing)\n3. Deposit funds\n4. Run debit / credit / transfer\n5. Check notifications\n\nAll requests go through the API Gateway on port 8080 with /v1/ prefix.\nService discovery via Eureka, load-balanced with lb://.",
+    "description": "Full Postman collection for the Banking Microservices System.\n\nBase URL: http://localhost:8080 (API Gateway)\n\n## How to use\n1. Run requests in the 'Auth' folder first — Login captures your access_token automatically\n2. All other folders use {{access_token}} — set automatically by the Login request\n3. Run the 'E2E — Full Flow' folder top-to-bottom for a complete test scenario\n\n## Variables auto-captured by test scripts\n- access_token — from Login response\n- refresh_token — from Login response\n- user_id — from Register or Create User\n- user_id_2 — from Create User 2\n- account_id — from Open Account 1\n- account_id_2 — from Open Account 2\n- txn_id — from any transaction\n- notif_id — from Get Notifications\n- audit_id — from Get Audit Events",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
-    { "key": "base_url",   "value": "http://localhost:8080", "type": "string" },
-    { "key": "user_id",    "value": "1",                     "type": "string" },
-    { "key": "user_id_2",  "value": "2",                     "type": "string" },
-    { "key": "account_id", "value": "1",                     "type": "string" },
-    { "key": "account_id_2","value": "2",                    "type": "string" },
-    { "key": "txn_id",     "value": "1",                     "type": "string" },
-    { "key": "notif_id",   "value": "1",                     "type": "string" }
+    { "key": "base_url",      "value": "http://localhost:8080", "type": "string" },
+    { "key": "access_token",  "value": "",                      "type": "string" },
+    { "key": "refresh_token", "value": "",                      "type": "string" },
+    { "key": "user_id",       "value": "1",                     "type": "string" },
+    { "key": "user_id_2",     "value": "2",                     "type": "string" },
+    { "key": "account_id",    "value": "1",                     "type": "string" },
+    { "key": "account_id_2",  "value": "2",                     "type": "string" },
+    { "key": "txn_id",        "value": "1",                     "type": "string" },
+    { "key": "notif_id",      "value": "1",                     "type": "string" },
+    { "key": "audit_id",      "value": "1",                     "type": "string" }
   ],
   "item": [
 
     {
-      "name": "1 — User Service",
-      "description": "Manage users: create, read, update, status change, soft delete.",
+      "name": "Auth — No token required",
+      "description": "All /v1/auth/** paths are public. No Authorization header needed.",
       "item": [
 
         {
-          "name": "Create User (John Doe)",
+          "name": "Register (creates user + credentials)",
           "request": {
             "method": "POST",
             "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/v1/auth/register", "host": ["{{base_url}}"], "path": ["v1","auth","register"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"John\",\n  \"lastName\": \"Doe\",\n  \"email\": \"john.doe@example.com\",\n  \"password\": \"password123\"\n}"
+            },
+            "description": "Creates both credentials (in auth-service DB) and user profile (in user-service DB) in one call. Returns access + refresh tokens immediately."
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "if (pm.response.code === 201) {",
+                "  var body = pm.response.json();",
+                "  if (body.accessToken) {",
+                "    pm.collectionVariables.set('access_token', body.accessToken);",
+                "    console.log('access_token captured from register');",
+                "  }",
+                "  if (body.refreshToken) {",
+                "    pm.collectionVariables.set('refresh_token', body.refreshToken);",
+                "  }",
+                "  if (body.userId) {",
+                "    pm.collectionVariables.set('user_id', body.userId);",
+                "    console.log('user_id set to', body.userId);",
+                "  }",
+                "}"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "response": []
+        },
+
+        {
+          "name": "Register User 2 (for transfer testing)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/v1/auth/register", "host": ["{{base_url}}"], "path": ["v1","auth","register"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"Jane\",\n  \"lastName\": \"Smith\",\n  \"email\": \"jane.smith@example.com\",\n  \"password\": \"password123\"\n}"
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "if (pm.response.code === 201) {",
+                "  var body = pm.response.json();",
+                "  if (body.userId) {",
+                "    pm.collectionVariables.set('user_id_2', body.userId);",
+                "    console.log('user_id_2 set to', body.userId);",
+                "  }",
+                "}"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "response": []
+        },
+
+        {
+          "name": "Login (get access + refresh token)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/v1/auth/login", "host": ["{{base_url}}"], "path": ["v1","auth","login"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"john.doe@example.com\",\n  \"password\": \"password123\"\n}"
+            },
+            "description": "Run this if your access token has expired (15 min TTL). Captures access_token and refresh_token automatically."
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "if (pm.response.code === 200) {",
+                "  var body = pm.response.json();",
+                "  if (body.accessToken) {",
+                "    pm.collectionVariables.set('access_token', body.accessToken);",
+                "    console.log('access_token updated from login');",
+                "  }",
+                "  if (body.refreshToken) {",
+                "    pm.collectionVariables.set('refresh_token', body.refreshToken);",
+                "  }",
+                "  pm.test('Login successful', function() {",
+                "    pm.response.to.have.status(200);",
+                "    pm.expect(body.accessToken).to.be.a('string');",
+                "  });",
+                "}"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "response": []
+        },
+
+        {
+          "name": "Refresh Token (get new access token)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/v1/auth/refresh", "host": ["{{base_url}}"], "path": ["v1","auth","refresh"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refresh_token}}\"\n}"
+            },
+            "description": "Exchange a valid refresh token for a new access token. Refresh tokens last 7 days."
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "if (pm.response.code === 200) {",
+                "  var body = pm.response.json();",
+                "  if (body.accessToken) {",
+                "    pm.collectionVariables.set('access_token', body.accessToken);",
+                "    console.log('access_token refreshed');",
+                "  }",
+                "}"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "response": []
+        },
+
+        {
+          "name": "Logout (revoke refresh token)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": { "raw": "{{base_url}}/v1/auth/logout", "host": ["{{base_url}}"], "path": ["v1","auth","logout"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refresh_token}}\"\n}"
+            },
+            "description": "Soft-revokes the refresh token in the DB. The access token still works until it expires (15 min). After logout, /refresh with this token returns 401."
+          },
+          "response": []
+        }
+
+      ]
+    },
+
+    {
+      "name": "Users",
+      "description": "User profile management. All endpoints require Authorization: Bearer {{access_token}}.",
+      "item": [
+
+        {
+          "name": "Create User (direct, no auth credentials)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
             "url": { "raw": "{{base_url}}/v1/users", "host": ["{{base_url}}"], "path": ["v1","users"] },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"firstName\": \"John\",\n  \"lastName\": \"Doe\",\n  \"email\": \"john.doe@example.com\"\n}"
-            }
+              "raw": "{\n  \"firstName\": \"Alice\",\n  \"lastName\": \"Johnson\",\n  \"email\": \"alice.johnson@example.com\"\n}"
+            },
+            "description": "Creates user profile only (no auth credentials). Usually called internally by auth-service /register. Use /auth/register for full user creation."
           },
           "event": [{
             "listen": "test",
@@ -48,36 +214,10 @@
         },
 
         {
-          "name": "Create User 2 (Jane Smith)",
-          "request": {
-            "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "url": { "raw": "{{base_url}}/v1/users", "host": ["{{base_url}}"], "path": ["v1","users"] },
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"firstName\": \"Jane\",\n  \"lastName\": \"Smith\",\n  \"email\": \"jane.smith@example.com\"\n}"
-            }
-          },
-          "event": [{
-            "listen": "test",
-            "script": {
-              "exec": [
-                "if (pm.response.code === 201) {",
-                "  var body = pm.response.json();",
-                "  pm.collectionVariables.set('user_id_2', body.id);",
-                "  console.log('user_id_2 set to', body.id);",
-                "}"
-              ],
-              "type": "text/javascript"
-            }
-          }],
-          "response": []
-        },
-
-        {
           "name": "List All Users (paginated)",
           "request": {
             "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
             "url": {
               "raw": "{{base_url}}/v1/users?page=0&size=20&sort=createdAt,desc",
               "host": ["{{base_url}}"],
@@ -93,9 +233,10 @@
         },
 
         {
-          "name": "List Users — Filter by Status ACTIVE",
+          "name": "List Users — Filter ACTIVE",
           "request": {
             "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
             "url": {
               "raw": "{{base_url}}/v1/users?status=ACTIVE&page=0&size=20",
               "host": ["{{base_url}}"],
@@ -114,6 +255,7 @@
           "name": "Get User by ID",
           "request": {
             "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
             "url": { "raw": "{{base_url}}/v1/users/{{user_id}}", "host": ["{{base_url}}"], "path": ["v1","users","{{user_id}}"] }
           },
           "response": []
@@ -123,6 +265,7 @@
           "name": "Get User by Email",
           "request": {
             "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
             "url": { "raw": "{{base_url}}/v1/users/email/john.doe@example.com", "host": ["{{base_url}}"], "path": ["v1","users","email","john.doe@example.com"] }
           },
           "response": []
@@ -132,7 +275,10 @@
           "name": "Update User Profile",
           "request": {
             "method": "PUT",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
             "url": { "raw": "{{base_url}}/v1/users/{{user_id}}", "host": ["{{base_url}}"], "path": ["v1","users","{{user_id}}"] },
             "body": {
               "mode": "raw",
@@ -146,7 +292,10 @@
           "name": "Update User Status → SUSPENDED",
           "request": {
             "method": "PUT",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
             "url": { "raw": "{{base_url}}/v1/users/{{user_id}}/status", "host": ["{{base_url}}"], "path": ["v1","users","{{user_id}}","status"] },
             "body": {
               "mode": "raw",
@@ -160,7 +309,10 @@
           "name": "Update User Status → ACTIVE",
           "request": {
             "method": "PUT",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
             "url": { "raw": "{{base_url}}/v1/users/{{user_id}}/status", "host": ["{{base_url}}"], "path": ["v1","users","{{user_id}}","status"] },
             "body": {
               "mode": "raw",
@@ -171,47 +323,12 @@
         },
 
         {
-          "name": "Soft Delete User → 204",
+          "name": "Delete User (soft delete → status=DELETED)",
           "request": {
             "method": "DELETE",
-            "url": { "raw": "{{base_url}}/v1/users/{{user_id}}", "host": ["{{base_url}}"], "path": ["v1","users","{{user_id}}"] }
-          },
-          "response": []
-        },
-
-        {
-          "name": "[Error] Create User — Duplicate Email → 409",
-          "request": {
-            "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "url": { "raw": "{{base_url}}/v1/users", "host": ["{{base_url}}"], "path": ["v1","users"] },
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"firstName\": \"Another\",\n  \"lastName\": \"Person\",\n  \"email\": \"john.doe@example.com\"\n}"
-            }
-          },
-          "response": []
-        },
-
-        {
-          "name": "[Error] Create User — Blank Name → 400",
-          "request": {
-            "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "url": { "raw": "{{base_url}}/v1/users", "host": ["{{base_url}}"], "path": ["v1","users"] },
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"firstName\": \"\",\n  \"lastName\": \"Doe\",\n  \"email\": \"valid@example.com\"\n}"
-            }
-          },
-          "response": []
-        },
-
-        {
-          "name": "[Error] Get User — Not Found → 404",
-          "request": {
-            "method": "GET",
-            "url": { "raw": "{{base_url}}/v1/users/99999", "host": ["{{base_url}}"], "path": ["v1","users","99999"] }
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": { "raw": "{{base_url}}/v1/users/{{user_id}}", "host": ["{{base_url}}"], "path": ["v1","users","{{user_id}}"] },
+            "description": "Soft delete — sets status=DELETED, returns 204. Row remains in DB."
           },
           "response": []
         }
@@ -220,20 +337,24 @@
     },
 
     {
-      "name": "2 — Account Service",
-      "description": "Manage bank accounts: open, deposit, withdraw, balance, status, close.",
+      "name": "Accounts",
+      "description": "Bank account management. All endpoints require Authorization: Bearer {{access_token}}.",
       "item": [
 
         {
-          "name": "Open Account (SAVINGS) for User 1",
+          "name": "Open Account (User 1 — Savings)",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
             "url": { "raw": "{{base_url}}/v1/accounts", "host": ["{{base_url}}"], "path": ["v1","accounts"] },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"userId\": {{user_id}},\n  \"type\": \"SAVINGS\"\n}"
-            }
+              "raw": "{\n  \"userId\": {{user_id}},\n  \"accountType\": \"SAVINGS\",\n  \"initialDeposit\": 1000.00\n}"
+            },
+            "description": "account-service calls user-service to verify userId is ACTIVE before creating. Publishes AccountAuditEvent to Kafka."
           },
           "event": [{
             "listen": "test",
@@ -252,14 +373,17 @@
         },
 
         {
-          "name": "Open Account (CURRENT) for User 2",
+          "name": "Open Account (User 2 — Current)",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
             "url": { "raw": "{{base_url}}/v1/accounts", "host": ["{{base_url}}"], "path": ["v1","accounts"] },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"userId\": {{user_id_2}},\n  \"type\": \"CURRENT\"\n}"
+              "raw": "{\n  \"userId\": {{user_id_2}},\n  \"accountType\": \"CURRENT\",\n  \"initialDeposit\": 500.00\n}"
             }
           },
           "event": [{
@@ -282,6 +406,7 @@
           "name": "List All Accounts (paginated)",
           "request": {
             "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
             "url": {
               "raw": "{{base_url}}/v1/accounts?page=0&size=20",
               "host": ["{{base_url}}"],
@@ -296,93 +421,84 @@
         },
 
         {
-          "name": "List Accounts — Filter ACTIVE",
-          "request": {
-            "method": "GET",
-            "url": {
-              "raw": "{{base_url}}/v1/accounts?status=ACTIVE",
-              "host": ["{{base_url}}"],
-              "path": ["v1","accounts"],
-              "query": [{ "key": "status", "value": "ACTIVE" }]
-            }
-          },
-          "response": []
-        },
-
-        {
           "name": "Get Account by ID",
           "request": {
             "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
             "url": { "raw": "{{base_url}}/v1/accounts/{{account_id}}", "host": ["{{base_url}}"], "path": ["v1","accounts","{{account_id}}"] }
           },
           "response": []
         },
 
         {
-          "name": "Get Account by Number",
+          "name": "Get Account Balance",
           "request": {
             "method": "GET",
-            "url": { "raw": "{{base_url}}/v1/accounts/number/ACC-20260409-001", "host": ["{{base_url}}"], "path": ["v1","accounts","number","ACC-20260409-001"] }
-          },
-          "response": []
-        },
-
-        {
-          "name": "Get All Accounts for User",
-          "request": {
-            "method": "GET",
-            "url": { "raw": "{{base_url}}/v1/accounts/user/{{user_id}}", "host": ["{{base_url}}"], "path": ["v1","accounts","user","{{user_id}}"] }
-          },
-          "response": []
-        },
-
-        {
-          "name": "Get Balance",
-          "request": {
-            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
             "url": { "raw": "{{base_url}}/v1/accounts/{{account_id}}/balance", "host": ["{{base_url}}"], "path": ["v1","accounts","{{account_id}}","balance"] }
           },
           "response": []
         },
 
         {
-          "name": "Deposit ₹5000 into Account 1",
+          "name": "Get Accounts for User",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": { "raw": "{{base_url}}/v1/accounts/user/{{user_id}}", "host": ["{{base_url}}"], "path": ["v1","accounts","user","{{user_id}}"] }
+          },
+          "response": []
+        },
+
+        {
+          "name": "Deposit to Account",
           "request": {
             "method": "PUT",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
             "url": { "raw": "{{base_url}}/v1/accounts/{{account_id}}/deposit", "host": ["{{base_url}}"], "path": ["v1","accounts","{{account_id}}","deposit"] },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"amount\": 5000.00\n}"
+              "raw": "{\n  \"amount\": 250.00,\n  \"description\": \"Salary deposit\"\n}"
             }
           },
           "response": []
         },
 
         {
-          "name": "Deposit ₹3000 into Account 2",
+          "name": "Withdraw from Account",
           "request": {
             "method": "PUT",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "url": { "raw": "{{base_url}}/v1/accounts/{{account_id_2}}/deposit", "host": ["{{base_url}}"], "path": ["v1","accounts","{{account_id_2}}","deposit"] },
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"amount\": 3000.00\n}"
-            }
-          },
-          "response": []
-        },
-
-        {
-          "name": "Withdraw ₹500 from Account 1",
-          "request": {
-            "method": "PUT",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
             "url": { "raw": "{{base_url}}/v1/accounts/{{account_id}}/withdraw", "host": ["{{base_url}}"], "path": ["v1","accounts","{{account_id}}","withdraw"] },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"amount\": 500.00\n}"
-            }
+              "raw": "{\n  \"amount\": 100.00,\n  \"description\": \"ATM withdrawal\"\n}"
+            },
+            "description": "Returns 422 if insufficient funds."
+          },
+          "response": []
+        },
+
+        {
+          "name": "Withdraw — Insufficient Funds (expect 422)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": { "raw": "{{base_url}}/v1/accounts/{{account_id}}/withdraw", "host": ["{{base_url}}"], "path": ["v1","accounts","{{account_id}}","withdraw"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 999999.00,\n  \"description\": \"Trying to overdraft\"\n}"
+            },
+            "description": "Should return 422 Unprocessable Entity with InsufficientFundsException."
           },
           "response": []
         },
@@ -391,7 +507,10 @@
           "name": "Update Account Status → SUSPENDED",
           "request": {
             "method": "PUT",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
             "url": { "raw": "{{base_url}}/v1/accounts/{{account_id}}/status", "host": ["{{base_url}}"], "path": ["v1","accounts","{{account_id}}","status"] },
             "body": {
               "mode": "raw",
@@ -405,7 +524,10 @@
           "name": "Update Account Status → ACTIVE",
           "request": {
             "method": "PUT",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
             "url": { "raw": "{{base_url}}/v1/accounts/{{account_id}}/status", "host": ["{{base_url}}"], "path": ["v1","accounts","{{account_id}}","status"] },
             "body": {
               "mode": "raw",
@@ -416,52 +538,12 @@
         },
 
         {
-          "name": "Close Account (Soft Delete) → 204",
+          "name": "Close Account (soft delete → CLOSED)",
           "request": {
             "method": "DELETE",
-            "url": { "raw": "{{base_url}}/v1/accounts/{{account_id}}", "host": ["{{base_url}}"], "path": ["v1","accounts","{{account_id}}"] }
-          },
-          "response": []
-        },
-
-        {
-          "name": "[Error] Withdraw — Insufficient Funds → 422",
-          "request": {
-            "method": "PUT",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "url": { "raw": "{{base_url}}/v1/accounts/{{account_id}}/withdraw", "host": ["{{base_url}}"], "path": ["v1","accounts","{{account_id}}","withdraw"] },
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"amount\": 9999999.00\n}"
-            }
-          },
-          "response": []
-        },
-
-        {
-          "name": "[Error] Open Account — User Not Found → 404",
-          "request": {
-            "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "url": { "raw": "{{base_url}}/v1/accounts", "host": ["{{base_url}}"], "path": ["v1","accounts"] },
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"userId\": 99999,\n  \"type\": \"SAVINGS\"\n}"
-            }
-          },
-          "response": []
-        },
-
-        {
-          "name": "[Error] Deposit — Negative Amount → 400",
-          "request": {
-            "method": "PUT",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "url": { "raw": "{{base_url}}/v1/accounts/{{account_id}}/deposit", "host": ["{{base_url}}"], "path": ["v1","accounts","{{account_id}}","deposit"] },
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"amount\": -100.00\n}"
-            }
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": { "raw": "{{base_url}}/v1/accounts/{{account_id}}", "host": ["{{base_url}}"], "path": ["v1","accounts","{{account_id}}"] },
+            "description": "Soft close — sets status=CLOSED, returns 204."
           },
           "response": []
         }
@@ -470,20 +552,24 @@
     },
 
     {
-      "name": "3 — Transaction Service",
-      "description": "Debit, Credit, Transfer. All return 201. Check 'status' field in response — may be FAILED.",
+      "name": "Transactions",
+      "description": "Money movement. All endpoints require Authorization: Bearer {{access_token}}.",
       "item": [
 
         {
-          "name": "Debit Account 1 (₹200 — ATM withdrawal)",
+          "name": "Credit Account (money IN)",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "url": { "raw": "{{base_url}}/v1/transactions/debit", "host": ["{{base_url}}"], "path": ["v1","transactions","debit"] },
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": { "raw": "{{base_url}}/v1/transactions/credit", "host": ["{{base_url}}"], "path": ["v1","transactions","credit"] },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"accountId\": {{account_id}},\n  \"amount\": 200.00,\n  \"description\": \"ATM withdrawal\"\n}"
-            }
+              "raw": "{\n  \"accountId\": {{account_id}},\n  \"amount\": 500.00,\n  \"description\": \"External deposit\"\n}"
+            },
+            "description": "Credits (adds money to) an account. No source account — money comes from outside."
           },
           "event": [{
             "listen": "test",
@@ -492,7 +578,7 @@
                 "if (pm.response.code === 201) {",
                 "  var body = pm.response.json();",
                 "  pm.collectionVariables.set('txn_id', body.id);",
-                "  console.log('txn_id set to', body.id, '| status:', body.status);",
+                "  console.log('txn_id set to', body.id);",
                 "}"
               ],
               "type": "text/javascript"
@@ -502,45 +588,99 @@
         },
 
         {
-          "name": "Credit Account 1 (₹1000 — salary)",
+          "name": "Debit Account (money OUT)",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "url": { "raw": "{{base_url}}/v1/transactions/credit", "host": ["{{base_url}}"], "path": ["v1","transactions","credit"] },
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": { "raw": "{{base_url}}/v1/transactions/debit", "host": ["{{base_url}}"], "path": ["v1","transactions","debit"] },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"accountId\": {{account_id}},\n  \"amount\": 1000.00,\n  \"description\": \"Salary credit\"\n}"
-            }
+              "raw": "{\n  \"accountId\": {{account_id}},\n  \"amount\": 200.00,\n  \"description\": \"Bill payment\"\n}"
+            },
+            "description": "Debits (removes money from) an account. No destination — money leaves the system."
           },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "if (pm.response.code === 201) {",
+                "  var body = pm.response.json();",
+                "  pm.collectionVariables.set('txn_id', body.id);",
+                "}"
+              ],
+              "type": "text/javascript"
+            }
+          }],
           "response": []
         },
 
         {
-          "name": "Transfer Account 1 → Account 2 (₹750 — rent)",
+          "name": "Transfer Between Accounts (Saga pattern)",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
             "url": { "raw": "{{base_url}}/v1/transactions/transfer", "host": ["{{base_url}}"], "path": ["v1","transactions","transfer"] },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"sourceAccountId\": {{account_id}},\n  \"targetAccountId\": {{account_id_2}},\n  \"amount\": 750.00,\n  \"description\": \"Rent payment\"\n}"
+              "raw": "{\n  \"sourceAccountId\": {{account_id}},\n  \"destinationAccountId\": {{account_id_2}},\n  \"amount\": 300.00,\n  \"description\": \"Rent payment\"\n}"
+            },
+            "description": "Transfers money between accounts using the Saga pattern with compensation. Always returns 201 — check the 'status' field in the response. If the transfer fails, the debit is automatically reversed (compensation)."
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "if (pm.response.code === 201) {",
+                "  var body = pm.response.json();",
+                "  pm.collectionVariables.set('txn_id', body.id);",
+                "  console.log('Transfer status:', body.status);",
+                "  if (body.status === 'FAILED') {",
+                "    console.log('Transfer failed:', body.failureReason);",
+                "  }",
+                "}"
+              ],
+              "type": "text/javascript"
             }
+          }],
+          "response": []
+        },
+
+        {
+          "name": "Transfer — Saga Compensation Demo (suspended destination)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": { "raw": "{{base_url}}/v1/transactions/transfer", "host": ["{{base_url}}"], "path": ["v1","transactions","transfer"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sourceAccountId\": {{account_id}},\n  \"destinationAccountId\": 99999,\n  \"amount\": 100.00,\n  \"description\": \"Transfer to non-existent account\"\n}"
+            },
+            "description": "Intentional failure — destination account 99999 does not exist. Source account balance will NOT change (saga compensates by reversing the debit). Response status=FAILED."
           },
           "response": []
         },
 
         {
-          "name": "List All Transactions (paginated)",
+          "name": "List All Transactions",
           "request": {
             "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
             "url": {
-              "raw": "{{base_url}}/v1/transactions?page=0&size=20&sort=createdAt,desc",
+              "raw": "{{base_url}}/v1/transactions?page=0&size=20",
               "host": ["{{base_url}}"],
               "path": ["v1","transactions"],
               "query": [
                 { "key": "page", "value": "0" },
-                { "key": "size", "value": "20" },
-                { "key": "sort", "value": "createdAt,desc" }
+                { "key": "size", "value": "20" }
               ]
             }
           },
@@ -551,55 +691,34 @@
           "name": "List Transactions — Filter COMPLETED",
           "request": {
             "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
             "url": {
-              "raw": "{{base_url}}/v1/transactions?status=COMPLETED",
-              "host": ["{{base_url}}"],
-              "path": ["v1","transactions"],
-              "query": [{ "key": "status", "value": "COMPLETED" }]
-            }
-          },
-          "response": []
-        },
-
-        {
-          "name": "List Transactions — Filter FAILED",
-          "request": {
-            "method": "GET",
-            "url": {
-              "raw": "{{base_url}}/v1/transactions?status=FAILED",
-              "host": ["{{base_url}}"],
-              "path": ["v1","transactions"],
-              "query": [{ "key": "status", "value": "FAILED" }]
-            }
-          },
-          "response": []
-        },
-
-        {
-          "name": "List Transactions — Filter by Type TRANSFER",
-          "request": {
-            "method": "GET",
-            "url": {
-              "raw": "{{base_url}}/v1/transactions?type=TRANSFER",
-              "host": ["{{base_url}}"],
-              "path": ["v1","transactions"],
-              "query": [{ "key": "type", "value": "TRANSFER" }]
-            }
-          },
-          "response": []
-        },
-
-        {
-          "name": "List Transactions — Filter COMPLETED + DEBIT",
-          "request": {
-            "method": "GET",
-            "url": {
-              "raw": "{{base_url}}/v1/transactions?status=COMPLETED&type=DEBIT",
+              "raw": "{{base_url}}/v1/transactions?status=COMPLETED&page=0&size=20",
               "host": ["{{base_url}}"],
               "path": ["v1","transactions"],
               "query": [
                 { "key": "status", "value": "COMPLETED" },
-                { "key": "type",   "value": "DEBIT" }
+                { "key": "page",   "value": "0" },
+                { "key": "size",   "value": "20" }
+              ]
+            }
+          },
+          "response": []
+        },
+
+        {
+          "name": "List Transactions — Filter TRANSFER type",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": {
+              "raw": "{{base_url}}/v1/transactions?type=TRANSFER&page=0&size=20",
+              "host": ["{{base_url}}"],
+              "path": ["v1","transactions"],
+              "query": [
+                { "key": "type", "value": "TRANSFER" },
+                { "key": "page", "value": "0" },
+                { "key": "size", "value": "20" }
               ]
             }
           },
@@ -610,58 +729,18 @@
           "name": "Get Transaction by ID",
           "request": {
             "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
             "url": { "raw": "{{base_url}}/v1/transactions/{{txn_id}}", "host": ["{{base_url}}"], "path": ["v1","transactions","{{txn_id}}"] }
           },
           "response": []
         },
 
         {
-          "name": "Get Transactions for Account 1",
+          "name": "Get Transactions for Account",
           "request": {
             "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
             "url": { "raw": "{{base_url}}/v1/transactions/account/{{account_id}}", "host": ["{{base_url}}"], "path": ["v1","transactions","account","{{account_id}}"] }
-          },
-          "response": []
-        },
-
-        {
-          "name": "[Error] Transfer — Self Transfer → 400",
-          "request": {
-            "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "url": { "raw": "{{base_url}}/v1/transactions/transfer", "host": ["{{base_url}}"], "path": ["v1","transactions","transfer"] },
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"sourceAccountId\": {{account_id}},\n  \"targetAccountId\": {{account_id}},\n  \"amount\": 100.00,\n  \"description\": \"Self transfer attempt\"\n}"
-            }
-          },
-          "response": []
-        },
-
-        {
-          "name": "[Error] Debit — Account Not Found → 422",
-          "request": {
-            "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "url": { "raw": "{{base_url}}/v1/transactions/debit", "host": ["{{base_url}}"], "path": ["v1","transactions","debit"] },
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"accountId\": 99999,\n  \"amount\": 100.00,\n  \"description\": \"Should fail\"\n}"
-            }
-          },
-          "response": []
-        },
-
-        {
-          "name": "[Error] Debit — Zero Amount → 400",
-          "request": {
-            "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "url": { "raw": "{{base_url}}/v1/transactions/debit", "host": ["{{base_url}}"], "path": ["v1","transactions","debit"] },
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"accountId\": {{account_id}},\n  \"amount\": 0.00,\n  \"description\": \"Zero amount\"\n}"
-            }
           },
           "response": []
         }
@@ -670,29 +749,36 @@
     },
 
     {
-      "name": "4 — Notification Service",
-      "description": "View and manage user notifications. Auto-generated by transaction-service. Can also be sent manually.",
+      "name": "Notifications",
+      "description": "Notifications are created asynchronously by RabbitMQ consumers (not via REST POST). Read-only from a client perspective. All endpoints require Authorization: Bearer {{access_token}}.",
       "item": [
 
         {
-          "name": "Send Notification Manually",
+          "name": "Get Notifications for User",
           "request": {
-            "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "url": { "raw": "{{base_url}}/v1/notifications", "host": ["{{base_url}}"], "path": ["v1","notifications"] },
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"userId\": {{user_id}},\n  \"type\": \"TRANSACTION_COMPLETED\",\n  \"channel\": \"IN_APP\",\n  \"title\": \"Account Funded\",\n  \"message\": \"Your account has been funded successfully.\"\n}"
-            }
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": {
+              "raw": "{{base_url}}/v1/notifications/user/{{user_id}}?page=0&size=20",
+              "host": ["{{base_url}}"],
+              "path": ["v1","notifications","user","{{user_id}}"],
+              "query": [
+                { "key": "page", "value": "0" },
+                { "key": "size", "value": "20" }
+              ]
+            },
+            "description": "After running a transfer, wait 1-2 seconds then call this — should show a new UNREAD notification."
           },
           "event": [{
             "listen": "test",
             "script": {
               "exec": [
-                "if (pm.response.code === 201) {",
+                "if (pm.response.code === 200) {",
                 "  var body = pm.response.json();",
-                "  pm.collectionVariables.set('notif_id', body.id);",
-                "  console.log('notif_id set to', body.id);",
+                "  if (body.content && body.content.length > 0) {",
+                "    pm.collectionVariables.set('notif_id', body.content[0].id);",
+                "    console.log('notif_id set to', body.content[0].id);",
+                "  }",
                 "}"
               ],
               "type": "text/javascript"
@@ -702,27 +788,10 @@
         },
 
         {
-          "name": "Get All Notifications for User 1",
+          "name": "Get Unread Notifications Only",
           "request": {
             "method": "GET",
-            "url": {
-              "raw": "{{base_url}}/v1/notifications/user/{{user_id}}?page=0&size=20&sort=createdAt,desc",
-              "host": ["{{base_url}}"],
-              "path": ["v1","notifications","user","{{user_id}}"],
-              "query": [
-                { "key": "page", "value": "0" },
-                { "key": "size", "value": "20" },
-                { "key": "sort", "value": "createdAt,desc" }
-              ]
-            }
-          },
-          "response": []
-        },
-
-        {
-          "name": "Get UNREAD Notifications Only",
-          "request": {
-            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
             "url": {
               "raw": "{{base_url}}/v1/notifications/user/{{user_id}}?unreadOnly=true",
               "host": ["{{base_url}}"],
@@ -734,9 +803,10 @@
         },
 
         {
-          "name": "Get Unread Count for User 1",
+          "name": "Get Unread Count",
           "request": {
             "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
             "url": { "raw": "{{base_url}}/v1/notifications/user/{{user_id}}/unread-count", "host": ["{{base_url}}"], "path": ["v1","notifications","user","{{user_id}}","unread-count"] }
           },
           "response": []
@@ -746,6 +816,7 @@
           "name": "Get Notification by ID",
           "request": {
             "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
             "url": { "raw": "{{base_url}}/v1/notifications/{{notif_id}}", "host": ["{{base_url}}"], "path": ["v1","notifications","{{notif_id}}"] }
           },
           "response": []
@@ -755,363 +826,65 @@
           "name": "Mark Notification as Read",
           "request": {
             "method": "PUT",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
             "url": { "raw": "{{base_url}}/v1/notifications/{{notif_id}}/read", "host": ["{{base_url}}"], "path": ["v1","notifications","{{notif_id}}","read"] }
           },
           "response": []
         },
 
         {
-          "name": "Mark ALL Notifications as Read → 204",
+          "name": "Mark All Notifications as Read",
           "request": {
             "method": "PUT",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
             "url": { "raw": "{{base_url}}/v1/notifications/user/{{user_id}}/read-all", "host": ["{{base_url}}"], "path": ["v1","notifications","user","{{user_id}}","read-all"] }
           },
           "response": []
         },
 
         {
-          "name": "Delete Notification (Soft) → 204",
+          "name": "Delete Notification (soft delete)",
           "request": {
             "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
             "url": { "raw": "{{base_url}}/v1/notifications/{{notif_id}}", "host": ["{{base_url}}"], "path": ["v1","notifications","{{notif_id}}"] }
           },
           "response": []
-        },
-
-        {
-          "name": "[Error] Notification Not Found → 404",
-          "request": {
-            "method": "GET",
-            "url": { "raw": "{{base_url}}/v1/notifications/99999", "host": ["{{base_url}}"], "path": ["v1","notifications","99999"] }
-          },
-          "response": []
         }
 
       ]
     },
 
     {
-      "name": "5 — Infrastructure Health Checks",
-      "description": "Verify all services and the gateway are healthy. Use these before running test flows.",
+      "name": "Audit",
+      "description": "Immutable audit log. Read-only — no write endpoints. Records created exclusively by Kafka consumers. All endpoints require Authorization: Bearer {{access_token}}.",
       "item": [
 
         {
-          "name": "Gateway Health",
+          "name": "List All Audit Events",
           "request": {
             "method": "GET",
-            "url": { "raw": "http://localhost:8080/actuator/health", "host": ["http://localhost:8080"], "path": ["actuator","health"] }
-          },
-          "response": []
-        },
-
-        {
-          "name": "User-Service Health (direct)",
-          "request": {
-            "method": "GET",
-            "url": { "raw": "http://localhost:8081/actuator/health", "host": ["http://localhost:8081"], "path": ["actuator","health"] }
-          },
-          "response": []
-        },
-
-        {
-          "name": "Account-Service Health (direct)",
-          "request": {
-            "method": "GET",
-            "url": { "raw": "http://localhost:8082/actuator/health", "host": ["http://localhost:8082"], "path": ["actuator","health"] }
-          },
-          "response": []
-        },
-
-        {
-          "name": "Transaction-Service Health (direct)",
-          "request": {
-            "method": "GET",
-            "url": { "raw": "http://localhost:8083/actuator/health", "host": ["http://localhost:8083"], "path": ["actuator","health"] }
-          },
-          "response": []
-        },
-
-        {
-          "name": "Notification-Service Health (direct)",
-          "request": {
-            "method": "GET",
-            "url": { "raw": "http://localhost:8084/actuator/health", "host": ["http://localhost:8084"], "path": ["actuator","health"] }
-          },
-          "response": []
-        },
-
-        {
-          "name": "Eureka Dashboard",
-          "request": {
-            "method": "GET",
-            "url": { "raw": "http://localhost:8761", "host": ["http://localhost:8761"] }
-          },
-          "response": []
-        },
-
-        {
-          "name": "Gateway Routes",
-          "request": {
-            "method": "GET",
-            "url": { "raw": "http://localhost:8080/actuator/gateway/routes", "host": ["http://localhost:8080"], "path": ["actuator","gateway","routes"] }
-          },
-          "response": []
-        }
-
-      ]
-    },
-
-    {
-      "name": "6 — Complete E2E Test Flow",
-      "description": "Run these in order to test the entire system end-to-end.\nEach request auto-sets variables via test scripts.\n\nFlow:\n1. Create User 1 + User 2\n2. Open accounts for each\n3. Deposit into Account 1\n4. Debit Account 1 (generates notification)\n5. Transfer from Account 1 to Account 2 (generates 2 notifications)\n6. Check notifications for both users",
-      "item": [
-
-        {
-          "name": "E2E-01: Create User 1",
-          "request": {
-            "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "url": { "raw": "{{base_url}}/v1/users", "host": ["{{base_url}}"], "path": ["v1","users"] },
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"firstName\": \"Alice\",\n  \"lastName\": \"Wonderland\",\n  \"email\": \"alice@banking.test\"\n}"
-            }
-          },
-          "event": [{
-            "listen": "test",
-            "script": {
-              "exec": [
-                "pm.test('Status 201', function() { pm.response.to.have.status(201); });",
-                "var body = pm.response.json();",
-                "pm.test('User is ACTIVE', function() { pm.expect(body.status).to.equal('ACTIVE'); });",
-                "pm.collectionVariables.set('user_id', body.id);"
-              ],
-              "type": "text/javascript"
-            }
-          }],
-          "response": []
-        },
-
-        {
-          "name": "E2E-02: Create User 2",
-          "request": {
-            "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "url": { "raw": "{{base_url}}/v1/users", "host": ["{{base_url}}"], "path": ["v1","users"] },
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"firstName\": \"Bob\",\n  \"lastName\": \"Builder\",\n  \"email\": \"bob@banking.test\"\n}"
-            }
-          },
-          "event": [{
-            "listen": "test",
-            "script": {
-              "exec": [
-                "pm.test('Status 201', function() { pm.response.to.have.status(201); });",
-                "var body = pm.response.json();",
-                "pm.collectionVariables.set('user_id_2', body.id);"
-              ],
-              "type": "text/javascript"
-            }
-          }],
-          "response": []
-        },
-
-        {
-          "name": "E2E-03: Open SAVINGS Account for User 1",
-          "request": {
-            "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "url": { "raw": "{{base_url}}/v1/accounts", "host": ["{{base_url}}"], "path": ["v1","accounts"] },
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"userId\": {{user_id}},\n  \"type\": \"SAVINGS\"\n}"
-            }
-          },
-          "event": [{
-            "listen": "test",
-            "script": {
-              "exec": [
-                "pm.test('Status 201', function() { pm.response.to.have.status(201); });",
-                "var body = pm.response.json();",
-                "pm.test('Balance starts at 0', function() { pm.expect(parseFloat(body.balance)).to.equal(0); });",
-                "pm.collectionVariables.set('account_id', body.id);"
-              ],
-              "type": "text/javascript"
-            }
-          }],
-          "response": []
-        },
-
-        {
-          "name": "E2E-04: Open CURRENT Account for User 2",
-          "request": {
-            "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "url": { "raw": "{{base_url}}/v1/accounts", "host": ["{{base_url}}"], "path": ["v1","accounts"] },
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"userId\": {{user_id_2}},\n  \"type\": \"CURRENT\"\n}"
-            }
-          },
-          "event": [{
-            "listen": "test",
-            "script": {
-              "exec": [
-                "pm.test('Status 201', function() { pm.response.to.have.status(201); });",
-                "var body = pm.response.json();",
-                "pm.collectionVariables.set('account_id_2', body.id);"
-              ],
-              "type": "text/javascript"
-            }
-          }],
-          "response": []
-        },
-
-        {
-          "name": "E2E-05: Deposit ₹10000 into Account 1",
-          "request": {
-            "method": "PUT",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "url": { "raw": "{{base_url}}/v1/accounts/{{account_id}}/deposit", "host": ["{{base_url}}"], "path": ["v1","accounts","{{account_id}}","deposit"] },
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"amount\": 10000.00\n}"
-            }
-          },
-          "event": [{
-            "listen": "test",
-            "script": {
-              "exec": [
-                "pm.test('Status 200', function() { pm.response.to.have.status(200); });",
-                "var body = pm.response.json();",
-                "pm.test('Balance is 10000', function() { pm.expect(parseFloat(body.balance)).to.equal(10000); });"
-              ],
-              "type": "text/javascript"
-            }
-          }],
-          "response": []
-        },
-
-        {
-          "name": "E2E-06: Debit ₹1500 from Account 1",
-          "request": {
-            "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "url": { "raw": "{{base_url}}/v1/transactions/debit", "host": ["{{base_url}}"], "path": ["v1","transactions","debit"] },
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"accountId\": {{account_id}},\n  \"amount\": 1500.00,\n  \"description\": \"E2E debit test\"\n}"
-            }
-          },
-          "event": [{
-            "listen": "test",
-            "script": {
-              "exec": [
-                "pm.test('Status 201', function() { pm.response.to.have.status(201); });",
-                "var body = pm.response.json();",
-                "pm.test('Transaction COMPLETED', function() { pm.expect(body.status).to.equal('COMPLETED'); });",
-                "pm.test('Type is DEBIT', function() { pm.expect(body.type).to.equal('DEBIT'); });",
-                "pm.collectionVariables.set('txn_id', body.id);"
-              ],
-              "type": "text/javascript"
-            }
-          }],
-          "response": []
-        },
-
-        {
-          "name": "E2E-07: Transfer ₹3000 from Account 1 → Account 2",
-          "request": {
-            "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "url": { "raw": "{{base_url}}/v1/transactions/transfer", "host": ["{{base_url}}"], "path": ["v1","transactions","transfer"] },
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"sourceAccountId\": {{account_id}},\n  \"targetAccountId\": {{account_id_2}},\n  \"amount\": 3000.00,\n  \"description\": \"E2E transfer test\"\n}"
-            }
-          },
-          "event": [{
-            "listen": "test",
-            "script": {
-              "exec": [
-                "pm.test('Status 201', function() { pm.response.to.have.status(201); });",
-                "var body = pm.response.json();",
-                "pm.test('Transaction COMPLETED', function() { pm.expect(body.status).to.equal('COMPLETED'); });",
-                "pm.test('Type is TRANSFER', function() { pm.expect(body.type).to.equal('TRANSFER'); });"
-              ],
-              "type": "text/javascript"
-            }
-          }],
-          "response": []
-        },
-
-        {
-          "name": "E2E-08: Verify Account 1 Balance (should be ₹5500)",
-          "request": {
-            "method": "GET",
-            "url": { "raw": "{{base_url}}/v1/accounts/{{account_id}}/balance", "host": ["{{base_url}}"], "path": ["v1","accounts","{{account_id}}","balance"] }
-          },
-          "event": [{
-            "listen": "test",
-            "script": {
-              "exec": [
-                "pm.test('Status 200', function() { pm.response.to.have.status(200); });",
-                "var body = pm.response.json();",
-                "pm.test('Balance is 5500 (10000 - 1500 - 3000)', function() {",
-                "  pm.expect(parseFloat(body.balance)).to.equal(5500);",
-                "});"
-              ],
-              "type": "text/javascript"
-            }
-          }],
-          "response": []
-        },
-
-        {
-          "name": "E2E-09: Verify Account 2 Balance (should be ₹3000)",
-          "request": {
-            "method": "GET",
-            "url": { "raw": "{{base_url}}/v1/accounts/{{account_id_2}}/balance", "host": ["{{base_url}}"], "path": ["v1","accounts","{{account_id_2}}","balance"] }
-          },
-          "event": [{
-            "listen": "test",
-            "script": {
-              "exec": [
-                "pm.test('Status 200', function() { pm.response.to.have.status(200); });",
-                "var body = pm.response.json();",
-                "pm.test('Balance is 3000', function() {",
-                "  pm.expect(parseFloat(body.balance)).to.equal(3000);",
-                "});"
-              ],
-              "type": "text/javascript"
-            }
-          }],
-          "response": []
-        },
-
-        {
-          "name": "E2E-10: Check Notifications for User 1",
-          "request": {
-            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
             "url": {
-              "raw": "{{base_url}}/v1/notifications/user/{{user_id}}?unreadOnly=true",
+              "raw": "{{base_url}}/v1/audit?page=0&size=20",
               "host": ["{{base_url}}"],
-              "path": ["v1","notifications","user","{{user_id}}"],
-              "query": [{ "key": "unreadOnly", "value": "true" }]
+              "path": ["v1","audit"],
+              "query": [
+                { "key": "page", "value": "0" },
+                { "key": "size", "value": "20" }
+              ]
             }
           },
           "event": [{
             "listen": "test",
             "script": {
               "exec": [
-                "pm.test('Status 200', function() { pm.response.to.have.status(200); });",
-                "var body = pm.response.json();",
-                "pm.test('Has notifications (debit + transfer sent)', function() {",
-                "  pm.expect(body.totalElements).to.be.at.least(2);",
-                "});",
-                "if (body.content && body.content.length > 0) {",
-                "  pm.collectionVariables.set('notif_id', body.content[0].id);",
+                "if (pm.response.code === 200) {",
+                "  var body = pm.response.json();",
+                "  if (body.content && body.content.length > 0) {",
+                "    pm.collectionVariables.set('audit_id', body.content[0].id);",
+                "    console.log('audit_id set to', body.content[0].id);",
+                "  }",
                 "}"
               ],
               "type": "text/javascript"
@@ -1121,24 +894,278 @@
         },
 
         {
-          "name": "E2E-11: Check Notifications for User 2",
+          "name": "List Audit Events — TRANSACTION only",
           "request": {
             "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
             "url": {
-              "raw": "{{base_url}}/v1/notifications/user/{{user_id_2}}?unreadOnly=true",
+              "raw": "{{base_url}}/v1/audit?eventType=TRANSACTION&page=0&size=20",
               "host": ["{{base_url}}"],
-              "path": ["v1","notifications","user","{{user_id_2}}"],
-              "query": [{ "key": "unreadOnly", "value": "true" }]
+              "path": ["v1","audit"],
+              "query": [
+                { "key": "eventType", "value": "TRANSACTION" },
+                { "key": "page",      "value": "0" },
+                { "key": "size",      "value": "20" }
+              ]
+            }
+          },
+          "response": []
+        },
+
+        {
+          "name": "List Audit Events — ACCOUNT only",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": {
+              "raw": "{{base_url}}/v1/audit?eventType=ACCOUNT&page=0&size=20",
+              "host": ["{{base_url}}"],
+              "path": ["v1","audit"],
+              "query": [
+                { "key": "eventType", "value": "ACCOUNT" },
+                { "key": "page",      "value": "0" },
+                { "key": "size",      "value": "20" }
+              ]
+            }
+          },
+          "response": []
+        },
+
+        {
+          "name": "Get Audit Event by ID",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": { "raw": "{{base_url}}/v1/audit/{{audit_id}}", "host": ["{{base_url}}"], "path": ["v1","audit","{{audit_id}}"] }
+          },
+          "response": []
+        },
+
+        {
+          "name": "Get Audit Events for Account (entity/ACCOUNT/{id})",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": { "raw": "{{base_url}}/v1/audit/entity/ACCOUNT/{{account_id}}", "host": ["{{base_url}}"], "path": ["v1","audit","entity","ACCOUNT","{{account_id}}"] },
+            "description": "Shows complete change history for one account: CREATED, DEPOSITED, WITHDRAWN, STATUS_CHANGED, CLOSED events."
+          },
+          "response": []
+        },
+
+        {
+          "name": "Get Audit Events for Transaction (entity/TRANSACTION/{id})",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": { "raw": "{{base_url}}/v1/audit/entity/TRANSACTION/{{txn_id}}", "host": ["{{base_url}}"], "path": ["v1","audit","entity","TRANSACTION","{{txn_id}}"] }
+          },
+          "response": []
+        },
+
+        {
+          "name": "Get Audit Events for User",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": { "raw": "{{base_url}}/v1/audit/user/{{user_id}}", "host": ["{{base_url}}"], "path": ["v1","audit","user","{{user_id}}"] },
+            "description": "All audit events linked to this user across all account and transaction events."
+          },
+          "response": []
+        }
+
+      ]
+    },
+
+    {
+      "name": "E2E — Complete Flow (run in order)",
+      "description": "Run these requests top-to-bottom for a complete end-to-end test. Each request captures values into collection variables so the next request uses them automatically.\n\nScenario:\n1. Register two users\n2. Login as User 1\n3. Open accounts for both users\n4. Deposit to User 1's account\n5. Transfer from User 1 to User 2\n6. Check notifications (async — may need 1-2 sec)\n7. Check audit trail (async — may need 1-2 sec)\n8. Test saga compensation (intentional failure)\n9. Verify balances unchanged after failed transfer",
+      "item": [
+
+        {
+          "name": "E2E 1 — Register User 1 (John Doe)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/v1/auth/register", "host": ["{{base_url}}"], "path": ["v1","auth","register"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"John\",\n  \"lastName\": \"Doe\",\n  \"email\": \"e2e.john@example.com\",\n  \"password\": \"password123\"\n}"
             }
           },
           "event": [{
             "listen": "test",
             "script": {
               "exec": [
-                "pm.test('Status 200', function() { pm.response.to.have.status(200); });",
+                "pm.test('User 1 registered', function() { pm.response.to.have.status(201); });",
                 "var body = pm.response.json();",
-                "pm.test('Has notification (transfer received)', function() {",
-                "  pm.expect(body.totalElements).to.be.at.least(1);",
+                "pm.collectionVariables.set('access_token', body.accessToken);",
+                "pm.collectionVariables.set('refresh_token', body.refreshToken);",
+                "pm.collectionVariables.set('user_id', body.userId);",
+                "console.log('[E2E 1] User 1 registered. userId =', body.userId);"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "response": []
+        },
+
+        {
+          "name": "E2E 2 — Register User 2 (Jane Smith)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/v1/auth/register", "host": ["{{base_url}}"], "path": ["v1","auth","register"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"Jane\",\n  \"lastName\": \"Smith\",\n  \"email\": \"e2e.jane@example.com\",\n  \"password\": \"password123\"\n}"
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('User 2 registered', function() { pm.response.to.have.status(201); });",
+                "var body = pm.response.json();",
+                "pm.collectionVariables.set('user_id_2', body.userId);",
+                "console.log('[E2E 2] User 2 registered. userId_2 =', body.userId);"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "response": []
+        },
+
+        {
+          "name": "E2E 3 — Login as User 1",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/v1/auth/login", "host": ["{{base_url}}"], "path": ["v1","auth","login"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"e2e.john@example.com\",\n  \"password\": \"password123\"\n}"
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Login successful', function() { pm.response.to.have.status(200); });",
+                "var body = pm.response.json();",
+                "pm.collectionVariables.set('access_token', body.accessToken);",
+                "pm.collectionVariables.set('refresh_token', body.refreshToken);",
+                "console.log('[E2E 3] Logged in. access_token captured.');"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "response": []
+        },
+
+        {
+          "name": "E2E 4 — Open Account for User 1 (Savings, $2000)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type",  "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": { "raw": "{{base_url}}/v1/accounts", "host": ["{{base_url}}"], "path": ["v1","accounts"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": {{user_id}},\n  \"accountType\": \"SAVINGS\",\n  \"initialDeposit\": 2000.00\n}"
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Account 1 opened', function() { pm.response.to.have.status(201); });",
+                "var body = pm.response.json();",
+                "pm.collectionVariables.set('account_id', body.id);",
+                "console.log('[E2E 4] Account 1 opened. id =', body.id, '| balance =', body.balance);"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "response": []
+        },
+
+        {
+          "name": "E2E 5 — Open Account for User 2 (Current, $500)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type",  "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": { "raw": "{{base_url}}/v1/accounts", "host": ["{{base_url}}"], "path": ["v1","accounts"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": {{user_id_2}},\n  \"accountType\": \"CURRENT\",\n  \"initialDeposit\": 500.00\n}"
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Account 2 opened', function() { pm.response.to.have.status(201); });",
+                "var body = pm.response.json();",
+                "pm.collectionVariables.set('account_id_2', body.id);",
+                "console.log('[E2E 5] Account 2 opened. id =', body.id, '| balance =', body.balance);"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "response": []
+        },
+
+        {
+          "name": "E2E 6 — Transfer $750 from User 1 to User 2",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type",  "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": { "raw": "{{base_url}}/v1/transactions/transfer", "host": ["{{base_url}}"], "path": ["v1","transactions","transfer"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sourceAccountId\": {{account_id}},\n  \"destinationAccountId\": {{account_id_2}},\n  \"amount\": 750.00,\n  \"description\": \"E2E transfer test\"\n}"
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Transfer processed', function() { pm.response.to.have.status(201); });",
+                "var body = pm.response.json();",
+                "pm.collectionVariables.set('txn_id', body.id);",
+                "pm.test('Transfer completed', function() { pm.expect(body.status).to.eql('COMPLETED'); });",
+                "console.log('[E2E 6] Transfer status:', body.status, '| txn_id =', body.id);",
+                "console.log('Expected: Account 1 = $1250, Account 2 = $1250');"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "response": []
+        },
+
+        {
+          "name": "E2E 7 — Verify Account 1 Balance ($1250)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": { "raw": "{{base_url}}/v1/accounts/{{account_id}}/balance", "host": ["{{base_url}}"], "path": ["v1","accounts","{{account_id}}","balance"] }
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Account 1 balance correct', function() {",
+                "  var body = pm.response.json();",
+                "  console.log('[E2E 7] Account 1 balance:', body.balance);",
+                "  pm.expect(parseFloat(body.balance)).to.be.closeTo(1250, 0.01);",
                 "});"
               ],
               "type": "text/javascript"
@@ -1148,20 +1175,270 @@
         },
 
         {
-          "name": "E2E-12: Mark All Notifications Read for User 1",
+          "name": "E2E 8 — Verify Account 2 Balance ($1250)",
           "request": {
-            "method": "PUT",
-            "url": { "raw": "{{base_url}}/v1/notifications/user/{{user_id}}/read-all", "host": ["{{base_url}}"], "path": ["v1","notifications","user","{{user_id}}","read-all"] }
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": { "raw": "{{base_url}}/v1/accounts/{{account_id_2}}/balance", "host": ["{{base_url}}"], "path": ["v1","accounts","{{account_id_2}}","balance"] }
           },
           "event": [{
             "listen": "test",
             "script": {
               "exec": [
-                "pm.test('Status 204', function() { pm.response.to.have.status(204); });"
+                "pm.test('Account 2 balance correct', function() {",
+                "  var body = pm.response.json();",
+                "  console.log('[E2E 8] Account 2 balance:', body.balance);",
+                "  pm.expect(parseFloat(body.balance)).to.be.closeTo(1250, 0.01);",
+                "});"
               ],
               "type": "text/javascript"
             }
           }],
+          "response": []
+        },
+
+        {
+          "name": "E2E 9 — Check Notifications (wait 1-2 sec after transfer)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": {
+              "raw": "{{base_url}}/v1/notifications/user/{{user_id}}?page=0&size=10",
+              "host": ["{{base_url}}"],
+              "path": ["v1","notifications","user","{{user_id}}"],
+              "query": [
+                { "key": "page", "value": "0" },
+                { "key": "size", "value": "10" }
+              ]
+            },
+            "description": "RabbitMQ consumer is async. If empty, wait 1-2 seconds and retry. Should contain UNREAD notification for the transfer."
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "var body = pm.response.json();",
+                "console.log('[E2E 9] Notifications count:', body.totalElements);",
+                "if (body.content && body.content.length > 0) {",
+                "  pm.collectionVariables.set('notif_id', body.content[0].id);",
+                "  console.log('[E2E 9] First notification:', body.content[0].type, '|', body.content[0].status);",
+                "} else {",
+                "  console.log('[E2E 9] No notifications yet — RabbitMQ may still be processing. Wait 1-2 sec and retry.');",
+                "}"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "response": []
+        },
+
+        {
+          "name": "E2E 10 — Check Audit Trail (wait 1-2 sec after transfer)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": {
+              "raw": "{{base_url}}/v1/audit/entity/TRANSACTION/{{txn_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["v1","audit","entity","TRANSACTION","{{txn_id}}"]
+            },
+            "description": "Kafka consumer is async. Should show the audit record for the transfer. Also check /v1/audit/entity/ACCOUNT/{{account_id}} for account-level events."
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "var body = pm.response.json();",
+                "console.log('[E2E 10] Audit events for transaction:', body.totalElements);",
+                "if (body.content && body.content.length > 0) {",
+                "  pm.collectionVariables.set('audit_id', body.content[0].id);",
+                "  console.log('[E2E 10] First audit event:', body.content[0].action, '| occurredAt:', body.content[0].occurredAt);",
+                "} else {",
+                "  console.log('[E2E 10] No audit events yet — Kafka consumer may still be processing. Wait 1-2 sec and retry.');",
+                "}"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "response": []
+        },
+
+        {
+          "name": "E2E 11 — Saga Compensation: Transfer to invalid account",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type",  "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": { "raw": "{{base_url}}/v1/transactions/transfer", "host": ["{{base_url}}"], "path": ["v1","transactions","transfer"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sourceAccountId\": {{account_id}},\n  \"destinationAccountId\": 99999,\n  \"amount\": 999.00,\n  \"description\": \"Saga compensation demo — should FAIL and revert\"\n}"
+            },
+            "description": "Destination account 99999 does not exist. transfer-service will: (1) debit Account 1, (2) fail to credit 99999, (3) automatically re-deposit to Account 1 (compensation). Net result: Account 1 balance unchanged."
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Transfer processed', function() { pm.response.to.have.status(201); });",
+                "var body = pm.response.json();",
+                "pm.test('Transfer FAILED (expected)', function() { pm.expect(body.status).to.eql('FAILED'); });",
+                "console.log('[E2E 11] Transfer status:', body.status);",
+                "console.log('[E2E 11] Failure reason:', body.failureReason);",
+                "console.log('[E2E 11] Account 1 balance should be UNCHANGED — saga compensation ran');"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "response": []
+        },
+
+        {
+          "name": "E2E 12 — Verify Account 1 Unchanged After Failed Transfer",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": { "raw": "{{base_url}}/v1/accounts/{{account_id}}/balance", "host": ["{{base_url}}"], "path": ["v1","accounts","{{account_id}}","balance"] }
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Balance unchanged after failed transfer (saga worked)', function() {",
+                "  var body = pm.response.json();",
+                "  console.log('[E2E 12] Account 1 balance after failed transfer:', body.balance);",
+                "  console.log('[E2E 12] Expected: still $1250 (saga compensation restored the debit)');",
+                "  pm.expect(parseFloat(body.balance)).to.be.closeTo(1250, 0.01);",
+                "});"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "response": []
+        },
+
+        {
+          "name": "E2E 13 — Refresh Token (get new access token)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/v1/auth/refresh", "host": ["{{base_url}}"], "path": ["v1","auth","refresh"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refresh_token}}\"\n}"
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Token refreshed', function() { pm.response.to.have.status(200); });",
+                "var body = pm.response.json();",
+                "pm.collectionVariables.set('access_token', body.accessToken);",
+                "console.log('[E2E 13] Access token refreshed successfully.');"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "response": []
+        }
+
+      ]
+    },
+
+    {
+      "name": "Error Cases",
+      "description": "Test error responses and edge cases. Demonstrates the standard error envelope: { timestamp, status, error, message, path }",
+      "item": [
+
+        {
+          "name": "401 — Missing token",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/v1/users", "host": ["{{base_url}}"], "path": ["v1","users"] },
+            "description": "No Authorization header → 401 from JWT GlobalFilter."
+          },
+          "response": []
+        },
+
+        {
+          "name": "401 — Invalid token",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer this.is.not.a.valid.jwt.token" }],
+            "url": { "raw": "{{base_url}}/v1/users", "host": ["{{base_url}}"], "path": ["v1","users"] }
+          },
+          "response": []
+        },
+
+        {
+          "name": "404 — User not found",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": { "raw": "{{base_url}}/v1/users/999999", "host": ["{{base_url}}"], "path": ["v1","users","999999"] }
+          },
+          "response": []
+        },
+
+        {
+          "name": "404 — Account not found",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": { "raw": "{{base_url}}/v1/accounts/999999", "host": ["{{base_url}}"], "path": ["v1","accounts","999999"] }
+          },
+          "response": []
+        },
+
+        {
+          "name": "422 — Withdraw insufficient funds",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type",  "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": { "raw": "{{base_url}}/v1/accounts/{{account_id}}/withdraw", "host": ["{{base_url}}"], "path": ["v1","accounts","{{account_id}}","withdraw"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 999999999.00,\n  \"description\": \"Overdraft attempt\"\n}"
+            }
+          },
+          "response": []
+        },
+
+        {
+          "name": "400 — Validation error (blank firstName)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type",  "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": { "raw": "{{base_url}}/v1/users", "host": ["{{base_url}}"], "path": ["v1","users"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"\",\n  \"lastName\": \"Doe\",\n  \"email\": \"invalid-email\"\n}"
+            },
+            "description": "Empty firstName and invalid email → 400 Bad Request with validation error details."
+          },
+          "response": []
+        },
+
+        {
+          "name": "401 — Login wrong password",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/v1/auth/login", "host": ["{{base_url}}"], "path": ["v1","auth","login"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"john.doe@example.com\",\n  \"password\": \"wrongpassword\"\n}"
+            }
+          },
           "response": []
         }
 

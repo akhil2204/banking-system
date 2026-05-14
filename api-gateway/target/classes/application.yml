@@ -83,6 +83,42 @@ spring:
           filters:
             - StripPrefix=1
 
+        # ------------------------------------------------------------------ #
+        # auth-service                                                         #
+        # External: /v1/auth/**  →  auth-service: /auth/**                   #
+        #                                                                      #
+        # These routes are PUBLIC — JwtAuthenticationFilter explicitly skips  #
+        # paths starting with /v1/auth/ so callers can register/login without #
+        # needing a token (they don't have one yet).                           #
+        # ------------------------------------------------------------------ #
+        - id: audit-service-route
+          uri: lb://audit-service
+          predicates:
+            - Path=/v1/audit/**
+          filters:
+            - RewritePath=/v1/(?<remaining>.*), /${remaining}
+
+        - id: audit-service-swagger-route
+          uri: lb://audit-service
+          predicates:
+            - Path=/audit-service/swagger-ui.html, /audit-service/swagger-ui/**, /audit-service/api-docs/**
+          filters:
+            - StripPrefix=1
+
+        - id: auth-service-route
+          uri: lb://auth-service
+          predicates:
+            - Path=/v1/auth/**
+          filters:
+            - RewritePath=/v1/(?<remaining>.*), /${remaining}
+
+        - id: auth-service-swagger-route
+          uri: lb://auth-service
+          predicates:
+            - Path=/auth-service/swagger-ui.html, /auth-service/swagger-ui/**, /auth-service/api-docs/**
+          filters:
+            - StripPrefix=1
+
   # Graceful shutdown: when the process receives SIGTERM, Spring stops accepting
   # new requests immediately but waits up to 25 s for in-flight requests to
   # complete before the JVM exits. Without this, a rolling deploy kills active
@@ -152,6 +188,11 @@ springdoc:
 # JWT validation filter (needs auth-service or shared secret):
 #   Add a custom GlobalFilter that validates Authorization header
 # --------------------------------------------------------------------------- #
+
+# JWT — used by JwtAuthenticationFilter to verify incoming tokens.
+# Must match the jwt.secret configured in auth-service (same shared key).
+jwt:
+  secret: ${JWT_SECRET:bXliYW5raW5nc2VjcmV0a2V5Zm9ySldUYXV0aFBoYXNlNDEyMzQ1Njc4OTA=}
 
 logging:
   pattern:

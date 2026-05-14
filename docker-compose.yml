@@ -1,8 +1,21 @@
 services:
 
+  zipkin:
+    image: openzipkin/zipkin:3
+    container_name: zipkin
+    ports:
+      - "9411:9411"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9411/health > /dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
   service-discovery:
     build:
-      context: ./service-discovery
+      context: .
+      dockerfile: service-discovery/Dockerfile
     container_name: service-discovery
     environment:
       EUREKA_HOSTNAME: service-discovery
@@ -16,10 +29,12 @@ services:
 
   api-gateway:
     build:
-      context: ./api-gateway
+      context: .
+      dockerfile: api-gateway/Dockerfile
     container_name: api-gateway
     environment:
       EUREKA_HOST: service-discovery
+      JWT_SECRET: ${JWT_SECRET:-bXliYW5raW5nc2VjcmV0a2V5Zm9ySldUYXV0aFBoYXNlNDEyMzQ1Njc4OTA=}
     ports:
       - "8080:8080"
     depends_on:
@@ -39,12 +54,8 @@ services:
       POSTGRES_USER: banking_user
       POSTGRES_PASSWORD: banking_pass
     ports:
-      # host:container — only port 5432 is exposed to localhost.
-      # Other services will talk to this via the Docker network, not localhost.
       - "5433:5432"
     volumes:
-      # Named volume: data survives container restarts and 'docker compose down'.
-      # Use 'docker compose down -v' to also delete the volume (wipe data).
       - postgres_users_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U banking_user -d banking_users"]
@@ -54,12 +65,14 @@ services:
 
   user-service:
     build:
-      context: ./user-service
+      context: .
+      dockerfile: user-service/Dockerfile
     container_name: user-service
     environment:
       DB_HOST: postgres-users
       DB_PORT: 5432
       EUREKA_HOST: service-discovery
+      ZIPKIN_HOST: zipkin
     ports:
       - "8081:8081"
     depends_on:
@@ -67,6 +80,8 @@ services:
         condition: service_healthy
       service-discovery:
         condition: service_healthy
+      zipkin:
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8081/actuator/health | grep -q '\"status\":\"UP\"'"]
       interval: 10s
@@ -92,12 +107,14 @@ services:
 
   account-service:
     build:
-      context: ./account-service
+      context: .
+      dockerfile: account-service/Dockerfile
     container_name: account-service
     environment:
       DB_HOST: postgres-accounts
       DB_PORT: 5432
       EUREKA_HOST: service-discovery
+      KAFKA_BOOTSTRAP: kafka:9092
     ports:
       - "8082:8082"
     depends_on:
@@ -107,8 +124,54 @@ services:
         condition: service_healthy
       user-service:
         condition: service_healthy
+      kafka:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8082/actuator/health | grep -q '\"status\":\"UP\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  kafka:
+    image: apache/kafka:3.7.0
+    container_name: kafka
+    environment:
+      - KAFKA_NODE_ID=1
+      - KAFKA_PROCESS_ROLES=broker,controller
+      - KAFKA_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      - KAFKA_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
+      - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1
+      - KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
+      - KAFKA_NUM_PARTITIONS=3
+    ports:
+      - "9092:9092"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: banking_user
+      RABBITMQ_DEFAULT_PASS: banking_pass
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -132,12 +195,15 @@ services:
 
   transaction-service:
     build:
-      context: ./transaction-service
+      context: .
+      dockerfile: transaction-service/Dockerfile
     container_name: transaction-service
     environment:
       DB_HOST: postgres-transactions
       DB_PORT: 5432
       EUREKA_HOST: service-discovery
+      RABBITMQ_HOST: rabbitmq
+      KAFKA_BOOTSTRAP: kafka:9092
     ports:
       - "8083:8083"
     depends_on:
@@ -146,6 +212,10 @@ services:
       service-discovery:
         condition: service_healthy
       account-service:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      kafka:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8083/actuator/health | grep -q '\"status\":\"UP\"'"]
@@ -172,12 +242,14 @@ services:
 
   notification-service:
     build:
-      context: ./notification-service
+      context: .
+      dockerfile: notification-service/Dockerfile
     container_name: notification-service
     environment:
       DB_HOST: postgres-notifications
       DB_PORT: 5432
       EUREKA_HOST: service-discovery
+      RABBITMQ_HOST: rabbitmq
     ports:
       - "8084:8084"
     depends_on:
@@ -185,8 +257,94 @@ services:
         condition: service_healthy
       service-discovery:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8084/actuator/health | grep -q '\"status\":\"UP\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-auth:
+    image: postgres:16-alpine
+    container_name: postgres-auth
+    environment:
+      POSTGRES_DB: banking_auth
+      POSTGRES_USER: banking_user
+      POSTGRES_PASSWORD: banking_pass
+    ports:
+      - "5437:5432"
+    volumes:
+      - postgres_auth_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U banking_user -d banking_auth"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  auth-service:
+    build:
+      context: .
+      dockerfile: auth-service/Dockerfile
+    container_name: auth-service
+    environment:
+      DB_HOST: postgres-auth
+      DB_PORT: 5432
+      EUREKA_HOST: service-discovery
+      JWT_SECRET: ${JWT_SECRET:-bXliYW5raW5nc2VjcmV0a2V5Zm9ySldUYXV0aFBoYXNlNDEyMzQ1Njc4OTA=}
+    ports:
+      - "8085:8085"
+    depends_on:
+      postgres-auth:
+        condition: service_healthy
+      service-discovery:
+        condition: service_healthy
+      user-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8085/actuator/health | grep -q '\"status\":\"UP\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-audit:
+    image: postgres:16-alpine
+    container_name: postgres-audit
+    environment:
+      POSTGRES_DB: banking_audit
+      POSTGRES_USER: banking_user
+      POSTGRES_PASSWORD: banking_pass
+    ports:
+      - "5438:5432"
+    volumes:
+      - postgres_audit_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U banking_user -d banking_audit"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  audit-service:
+    build:
+      context: .
+      dockerfile: audit-service/Dockerfile
+    container_name: audit-service
+    environment:
+      DB_HOST: postgres-audit
+      DB_PORT: 5432
+      EUREKA_HOST: service-discovery
+      KAFKA_BOOTSTRAP: kafka:9092
+    ports:
+      - "8086:8086"
+    depends_on:
+      postgres-audit:
+        condition: service_healthy
+      service-discovery:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8086/actuator/health | grep -q '\"status\":\"UP\"'"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -196,3 +354,7 @@ volumes:
   postgres_accounts_data:
   postgres_transactions_data:
   postgres_notifications_data:
+  postgres_auth_data:
+  rabbitmq_data:
+  kafka_data:
+  postgres_audit_data:

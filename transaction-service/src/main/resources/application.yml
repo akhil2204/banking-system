@@ -35,6 +35,20 @@ spring:
         dialect: org.hibernate.dialect.PostgreSQLDialect
         format_sql: true
 
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
+    producer:
+      # acks=all: wait for all in-sync replicas to acknowledge before returning.
+      # In a single-broker dev cluster this is equivalent to acks=1, but the
+      # setting is correct for production without code change.
+      acks: all
+
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: 5672
+    username: ${RABBITMQ_USER:banking_user}
+    password: ${RABBITMQ_PASS:banking_pass}
+
   lifecycle:
     timeout-per-shutdown-phase: 25s
 
@@ -70,18 +84,6 @@ resilience4j:
         ignore-exceptions:
           - feign.FeignException.NotFound
           - feign.FeignException.BadRequest
-      # Notification circuit breaker uses more lenient thresholds — a failed
-      # notification must never affect transaction throughput. The circuit
-      # opens only after sustained failures, giving notification-service more
-      # time to recover without blocking transactions.
-      notification-service:
-        sliding-window-size: 10
-        failure-rate-threshold: 80
-        wait-duration-in-open-state: 30s
-        permitted-number-of-calls-in-half-open-state: 5
-        minimum-number-of-calls: 5
-        register-health-indicator: true
-
 management:
   endpoints:
     web:

@@ -1,0 +1,88 @@
+spring:
+  application:
+    name: auth-service
+
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5437}/${DB_NAME:banking_auth}
+    username: ${DB_USER:banking_user}
+    password: ${DB_PASSWORD:banking_pass}
+    driver-class-name: org.postgresql.Driver
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    open-in-view: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+
+  lifecycle:
+    timeout-per-shutdown-phase: 25s
+
+server:
+  port: 8085
+  shutdown: graceful
+
+springdoc:
+  api-docs:
+    path: /api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    operations-sorter: method
+
+eureka:
+  client:
+    service-url:
+      defaultZone: http://${EUREKA_HOST:localhost}:8761/eureka/
+  instance:
+    prefer-ip-address: true
+    instance-id: ${spring.application.name}:${server.port}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: always
+
+# JWT configuration — shared secret between auth-service (signs) and api-gateway (verifies).
+# In production this MUST be a cryptographically random value injected via a secrets manager.
+# For HS256, the key must be at least 256 bits (32 bytes). The default below is a
+# base64-encoded 32-byte dev key. Never ship a hardcoded secret to production.
+jwt:
+  secret: ${JWT_SECRET:bXliYW5raW5nc2VjcmV0a2V5Zm9ySldUYXV0aFBoYXNlNDEyMzQ1Njc4OTA=}
+  expiration-hours: ${JWT_EXPIRATION_HOURS:24}
+
+# Resilience4j — circuit breaker for the UserClient Feign call.
+resilience4j:
+  circuitbreaker:
+    instances:
+      user-service:
+        sliding-window-size: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 3
+
+# Feign — log request/response in DEBUG for dev. Set to NONE in production.
+feign:
+  circuitbreaker:
+    enabled: true
+  client:
+    config:
+      default:
+        logger-level: BASIC
+        connect-timeout: 5000
+        read-timeout: 5000
+
+logging:
+  level:
+    com.banking: INFO
+    org.hibernate.SQL: WARN
