@@ -28,6 +28,17 @@ spring:
         dialect: org.hibernate.dialect.PostgreSQLDialect
         format_sql: true
 
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: 5672
+    username: ${RABBITMQ_USER:banking_user}
+    password: ${RABBITMQ_PASS:banking_pass}
+    listener:
+      simple:
+        # NACKed messages go to DLQ — do not requeue them into the main queue
+        # (default true would cause infinite retry loops on bad messages)
+        default-requeue-rejected: false
+
   lifecycle:
     timeout-per-shutdown-phase: 25s
 

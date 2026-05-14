@@ -1,0 +1,13 @@
+target/
+*.log
+*.class
+*.jar
+*.war
+node_modules/
+.env
+.idea/
+.vscode/
+.claude/
+*.iml
+.claude/
+.CLAUDE.md

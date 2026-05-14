@@ -4,10 +4,44 @@
 Multi-module Maven project. Each service is a separate Spring Boot app.
 Always work one service at a time. Never modify multiple services in one session.
 
+---
+
+## Session scope rules — prevent token bloat
+
+These rules exist because large sessions exhaust context, produce errors, and slow everything down.
+
+### Hard limits per session
+- **One service per session.** docker-compose.yml and CLAUDE.md/memory are the only allowed side-effects.
+- **One phase step per session.** Never combine "add Kafka to transaction-service" and "add Kafka to account-service" in one prompt.
+- **Documentation is a separate session.** Never write or rewrite SYSTEM_DOCUMENTATION.md at the end of an implementation session.
+- **No back-to-back phases without a new session.** Phase 5a and Phase 5b must be separate sessions.
+
+### Editing rules (prevent edit-call explosion)
+- If a file needs more than 2 edits in a session → Read it once, then Write the full replacement. Never chain 5+ Edit calls on the same file.
+- Read only files that are directly needed. Do not read the whole service upfront — read one file, decide if more are needed.
+
+### How to prompt for low token usage
+Instead of:                          → Say instead:
+"implement phase 5b"                 → "add Kafka producer to transaction-service only"
+"go with 5a then 5b"                 → do 5a, start a new session, then do 5b
+"create a detailed document"         → start a fresh session: "write SYSTEM_DOCUMENTATION.md"
+"update all services with X"         → "update account-service with X" (one service per session)
+
+### Phase decomposition (how to break up future phases)
+Each line below = one session:
+- Phase 6a: add Zipkin to one service, validate it works, then repeat per service
+- Phase 6b: add Prometheus to one service at a time
+- Phase 7: write integration tests for one service at a time
+- Documentation rewrites: always a standalone session with no implementation
+
+---
+
 ## Tech stack
 - Java 21, Spring Boot 3.4.3, Spring Cloud 2024.0.1, Maven multi-module
-- PostgreSQL (user-service, account-service, transaction-service)
+- PostgreSQL (user-service, account-service, transaction-service, notification-service, auth-service, audit-service)
 - Docker Compose for all local infrastructure
+- RabbitMQ 3.x — async notification delivery (transaction-service → notification-service)
+- Kafka 3.7 KRaft — audit event streaming (transaction-service + account-service → audit-service)
 
 ## Architecture rules — never break these
 - Each service owns its own database schema. Never cross-query between service DBs.
@@ -34,45 +68,81 @@ Always work one service at a time. Never modify multiple services in one session
 | account-service | 8082 |
 | transaction-service | 8083 |
 | notification-service | 8084 |
+| auth-service | 8085 |
+| audit-service | 8086 |
 | service-discovery | 8761 |
 | postgres-users | 5433 |
 | postgres-accounts | 5434 |
 | postgres-transactions | 5435 |
+| postgres-notifications | 5436 |
+| postgres-auth | 5437 |
+| postgres-audit | 5438 |
+| RabbitMQ AMQP | 5672 |
+| RabbitMQ Management UI | 15672 |
+| Kafka | 9092 |
 
 ---
 
-## Current build status
+## Build phases
 
-### DONE — all services complete
+### Phase 1 — Foundation ✓
 - Parent POM (multi-module, Spring Boot 3.4.3, Spring Cloud 2024.0.1, Java 21)
-- service-discovery ✓
-- api-gateway ✓
-- user-service ✓
-- account-service ✓
-- transaction-service ✓
-- notification-service ✓
+- service-discovery (Eureka server)
+- api-gateway (WebFlux, load-balanced routes, graceful shutdown)
+- user-service (first CRUD service, establishes all base patterns)
+
+### Phase 2 — Core banking ✓
+- account-service (Feign → user-service, BigDecimal balance, optimistic locking)
+- transaction-service (Feign → account-service, PENDING→COMPLETED/FAILED state machine, Saga compensation)
+
+### Phase 3 — Reliability ✓
+- notification-service (originally called synchronously by transaction-service; replaced by RabbitMQ in Phase 5a)
+- Flyway migrations — V1__init.sql in all 5 DB-backed services; ddl-auto: validate
+- Circuit breaker (Resilience4j) — account-service (UserClient), transaction-service (AccountClient)
+
+### Phase 4 — Security ✓
+- auth-service (BCrypt, access token + refresh token, HMAC-SHA256 JWT)
+- api-gateway JWT GlobalFilter (validates Bearer token; whitelists /v1/auth/**)
+
+### Phase 5a — Async Notifications via RabbitMQ ✓
+- RabbitMQ container added to Docker Compose (port 5672 AMQP, 15672 Management UI)
+- transaction-service: publishes `TransactionEvent` to topic exchange `banking.transactions`
+  - routing key `transaction.completed` / `transaction.failed`
+  - Removed `NotificationClient` Feign call + circuit breaker for notification-service
+- notification-service: `@RabbitListener` consumes queue `notification.transaction.queue`
+  - Dead letter queue `notification.transaction.dlq` for failed/bad messages
+  - `defaultRequeueRejected=false` — bad messages go to DLQ, not infinite retry
+
+Key patterns introduced:
+- Topic exchange with wildcard binding (`transaction.#`) — new event types need zero config change
+- DLQ pattern — failed messages held for inspection instead of silently dropped
+- Each service owns its own `TransactionEvent` record copy — no shared library, no enum coupling
+- Producer catches publish failures silently; consumer rethrows so broker handles retry/DLQ
+
+### Phase 5b — Audit Event Streaming via Kafka ✓
+- Kafka (KRaft, bitnami/kafka:3.7) added to Docker Compose — no Zookeeper needed
+- transaction-service: publishes `TransactionAuditEvent` to topic `banking.audit.transactions`
+- account-service: publishes `AccountAuditEvent` to topic `banking.audit.accounts`
+- New **audit-service** (port 8086, DB: banking_audit, postgres-audit:5438)
+  - `@KafkaListener` consumers on both topics, consumer group `audit-service`
+  - Receives raw JSON strings, parses with ObjectMapper — no class coupling to producers
+  - Read-only REST API: GET /audit, GET /audit/{id}, GET /audit/entity/{type}/{id}, GET /audit/user/{userId}
+  - No write REST endpoint — all records created exclusively via Kafka
+
+Key patterns introduced:
+- Partition key = entityId → per-entity ordering guaranteed
+- `ADD_TYPE_INFO_HEADERS=false` on producer → clean JSON payload, no class name embedded
+- String deserialization + ObjectMapper in consumer → explicit, type-safe, no magic headers
+- `AckMode.RECORD` → offset committed per message; restart replays unprocessed messages
+- `auto-offset-reset=earliest` → audit-service can rebuild from zero by resetting offset
+- Payload column stores full raw JSON → complete, immutable audit snapshot per event
+- `occurredAt` (business time) vs `receivedAt` (processing time) — gap = end-to-end latency
+
+### Current build status
+All 5 phases (5a + 5b) complete. 8 services running. Full system documentation at SYSTEM_DOCUMENTATION.md.
 
 ### TODO
 - (all core services built — see next steps below)
-
----
-
-## Recommended build order and why
-
-### 1. account-service (next)
-Manages bank accounts (SAVINGS / CURRENT), balances, and account lifecycle.
-Calls user-service via Feign to validate a user exists before opening an account.
-transaction-service depends on this — must exist first.
-
-### 2. transaction-service
-Manages DEBIT / CREDIT / TRANSFER operations.
-Calls account-service via Feign to check balances and trigger updates.
-Never touches the accounts DB directly.
-
-### 3. notification-service
-Notifies users of account and transaction events.
-Start synchronous (called by Feign from transaction-service).
-Later upgrade to async with RabbitMQ/Kafka — add that infrastructure then.
 
 ---
 
@@ -194,19 +264,27 @@ Dashboard: http://localhost:8761
 ### api-gateway ✓
 **Port:** 8080 | No database | Stack: WebFlux — NEVER add spring-boot-starter-web here
 
-- `/v1/users/**` → `lb://user-service` (RewritePath strips /v1)
+- Routes: `/v1/users/**`, `/v1/accounts/**`, `/v1/transactions/**`, `/v1/notifications/**`, `/v1/auth/**`, `/v1/audit/**`
+- All use `lb://` prefix — resolved via Eureka
+- RewritePath strips `/v1` before forwarding
 - Graceful shutdown (25s), response compression, liveness/readiness probes
 - Live routes: http://localhost:8080/actuator/gateway/routes
+
+**JWT GlobalFilter (Phase 4 — done):**
+- Validates Bearer token on every incoming request before routing
+- Public paths (`/v1/auth/**`) are whitelisted and bypass the filter
+- Returns 401 if token is missing, expired, or invalid
+- On success, forwards `X-User-Id`, `X-User-Email`, `X-User-Role` headers downstream
 
 **Deferred (infrastructure not yet added):**
 - Rate limiting → needs Redis
 - Distributed tracing → needs Zipkin
 - Prometheus metrics → needs micrometer-registry-prometheus + Prometheus container
-- JWT validation filter → needs auth design
 
 ### account-service ✓
 **Port:** 8082 | **DB:** banking_accounts (postgres-accounts:5434)
 Calls user-service via Feign: `@FeignClient(name = "user-service")`
+Publishes `AccountAuditEvent` to Kafka topic `banking.audit.accounts`
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -224,7 +302,7 @@ Calls user-service via Feign: `@FeignClient(name = "user-service")`
 External (via gateway): `/v1/accounts/**`
 Swagger: http://localhost:8082/swagger-ui.html
 
-Key patterns introduced:
+Key patterns:
 - `BigDecimal(precision=19, scale=4)` for balance — never double/float
 - `@Version` on Account entity — optimistic locking, 409 on concurrent update
 - `FeignException` handling — 404 from upstream → 404, other → 503
@@ -232,10 +310,13 @@ Key patterns introduced:
 - `InsufficientFundsException` → 422 Unprocessable Entity
 - `AccountNotActiveException` → 422 Unprocessable Entity
 - `BigDecimal.compareTo()` for value comparison (not equals — scale-aware)
+- Kafka publish after every state change (CREATED, DEPOSITED, WITHDRAWN, STATUS_CHANGED, CLOSED)
 
 ### transaction-service ✓
 **Port:** 8083 | **DB:** banking_transactions (postgres-transactions:5435)
 Calls account-service via Feign: `@FeignClient(name = "account-service")`
+Publishes `TransactionEvent` to RabbitMQ exchange `banking.transactions`
+Publishes `TransactionAuditEvent` to Kafka topic `banking.audit.transactions`
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -249,12 +330,81 @@ Calls account-service via Feign: `@FeignClient(name = "account-service")`
 External (via gateway): `/v1/transactions/**`
 Swagger: http://localhost:8083/swagger-ui.html
 
-Key patterns introduced:
+Key patterns:
 - PENDING→COMPLETED/FAILED state machine — record persisted before any Feign call
 - Manual Saga compensating transaction on transfer deposit failure
 - `@Slf4j` structured logging of all transaction outcomes
 - `resolveAccount()` helper — consolidates Feign call + active-status check
 - Transfer always returns 201; caller must check `status` field in response
+- No Feign call to notification-service — notification delivery is async via RabbitMQ only
+
+### notification-service ✓
+**Port:** 8084 | **DB:** banking_notifications (postgres-notifications:5436)
+Consumes from RabbitMQ queue `notification.transaction.queue` — **no inbound Feign calls**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | /notifications | Create notification (internal — called by RabbitMQ consumer) |
+| GET | /notifications/{id} | Get by ID |
+| GET | /notifications/user/{userId} | All for user (?unreadOnly=true) |
+| GET | /notifications/user/{userId}/unread-count | Count of unread notifications |
+| PUT | /notifications/{id}/read | Mark single as read |
+| PUT | /notifications/user/{userId}/read-all | Mark all as read |
+| DELETE | /notifications/{id} | Soft delete |
+
+External (via gateway): `/v1/notifications/**`
+Swagger: http://localhost:8084/swagger-ui.html
+
+Key patterns:
+- Notification types: TRANSACTION_DEBIT, TRANSACTION_CREDIT, TRANSACTION_TRANSFER
+- Notification status: UNREAD → READ (soft delete → DELETED)
+- Notification channel: IN_APP (EMAIL/SMS fields exist for future use)
+- Created exclusively by RabbitMQ consumer — REST POST is internal
+- DLQ: `notification.transaction.dlq` — bad messages land here, not requeued
+
+### auth-service ✓
+**Port:** 8085 | **DB:** banking_auth (postgres-auth:5437)
+No Feign calls outbound — standalone token issuer
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | /auth/register | Register credential (BCrypt hash stored) + creates user via Feign |
+| POST | /auth/login | Validate credentials → return signed JWT |
+| POST | /auth/refresh | Exchange refresh token for new access token |
+| POST | /auth/logout | Soft-invalidate refresh token |
+
+External (via gateway): `/v1/auth/**` — whitelisted (no JWT check on these paths)
+Swagger: http://localhost:8085/swagger-ui.html
+
+Key patterns:
+- BCrypt password hashing — never store plaintext
+- Access token (short-lived, 15 min) + refresh token (long-lived 7 days, stored in DB)
+- JWT signed with HMAC-SHA256; secret injected via env var (`JWT_SECRET`)
+- api-gateway GlobalFilter reads and validates the same secret to verify tokens
+- Refresh tokens soft-invalidated on logout (status field)
+- `/auth/register` calls user-service via Feign to create the user profile first
+
+### audit-service ✓
+**Port:** 8086 | **DB:** banking_audit (postgres-audit:5438)
+Consumes from Kafka topics `banking.audit.transactions` and `banking.audit.accounts`
+**No write REST endpoint** — all records created exclusively via Kafka consumers
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | /audit | List all audit events (paginated, ?eventType=TRANSACTION\|ACCOUNT) |
+| GET | /audit/{id} | Get single event |
+| GET | /audit/entity/{eventType}/{entityId} | All events for one entity |
+| GET | /audit/user/{userId} | All events linked to a user |
+
+External (via gateway): `/v1/audit/**`
+Swagger: http://localhost:8086/swagger-ui.html
+
+Key patterns:
+- `occurredAt` (business time from source) vs `receivedAt` (Kafka processing time)
+- `payload` column = full raw JSON snapshot — immutable, complete point-in-time record
+- `auto-offset-reset=earliest` + `AckMode.RECORD` — restart replays from last committed offset
+- Consumer group `audit-service` — reset offset to 0 to rebuild entire audit table from Kafka log
+- Indexes on event_type, entity_id, user_id, occurred_at for efficient filtering
 
 ---
 
@@ -269,18 +419,23 @@ Key patterns introduced:
 | account-service | ./account-service | 8082 |
 | postgres-transactions | postgres:16-alpine | 5435→5432 |
 | transaction-service | ./transaction-service | 8083 |
-
 | postgres-notifications | postgres:16-alpine | 5436→5432 |
 | notification-service | ./notification-service | 8084 |
+| postgres-auth | postgres:16-alpine | 5437→5432 |
+| auth-service | ./auth-service | 8085 |
+| postgres-audit | postgres:16-alpine | 5438→5432 |
+| audit-service | ./audit-service | 8086 |
+| rabbitmq | rabbitmq:3-management | 5672, 15672 |
+| kafka | bitnami/kafka:3.7 | 9092 |
 
 ---
 
 ## Suggested next steps (choose based on goals)
 
 ### Production hardening
-- **Flyway migrations** ✓ — all 4 DB services have V1__init.sql; ddl-auto: validate
-- **Circuit breaker (Resilience4j)** ✓ — account-service (UserClient), transaction-service (AccountClient + NotificationClient)
-- **JWT auth** — add a Spring Security filter in api-gateway; each service validates the token
+- **Flyway migrations** ✓ — all 6 DB services have V1__init.sql; ddl-auto: validate
+- **Circuit breaker (Resilience4j)** ✓ — account-service (UserClient), transaction-service (AccountClient)
+- **JWT auth** ✓ — auth-service issues tokens; api-gateway GlobalFilter validates every request
 - **Integration tests** — `@SpringBootTest` + Testcontainers (spins up real PostgreSQL in Docker for tests)
 
 ### Observability
@@ -288,5 +443,5 @@ Key patterns introduced:
 - **Prometheus + Grafana** — add `micrometer-registry-prometheus`; dashboards for request rates, error rates, latency
 
 ### Reliability
-- **Async notifications** — replace synchronous Feign call from transaction-service with RabbitMQ/Kafka event; notification-service becomes a consumer; decouples the two services completely
-- **Circuit breaker** — add Resilience4j to account-service and transaction-service Feign clients; fail fast when downstream is unhealthy instead of waiting for timeouts
+- **Async notifications via RabbitMQ** ✓ — transaction-service publishes events; notification-service consumes; fully decoupled
+- **Async audit via Kafka** ✓ — audit-service (port 8086) consumes Kafka topics from transaction-service and account-service; immutable audit log with replay capability

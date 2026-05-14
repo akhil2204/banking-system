@@ -67,6 +67,12 @@ management:
   endpoint:
     health:
       show-details: always
+  tracing:
+    sampling:
+      probability: 1.0
+
+spring.zipkin:
+  base-url: http://${ZIPKIN_HOST:localhost}:9411
 
 logging:
   level:

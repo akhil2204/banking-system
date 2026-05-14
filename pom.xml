@@ -30,6 +30,8 @@
         <module>account-service</module>
         <module>transaction-service</module>
         <module>notification-service</module>
+        <module>auth-service</module>
+        <module>audit-service</module>
     </modules>
 
     <properties>
