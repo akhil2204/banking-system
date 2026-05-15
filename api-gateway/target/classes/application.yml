@@ -15,6 +15,21 @@ spring:
         connect-timeout: 10000
         response-timeout: 10s
 
+      # Applied to every route. Rate limiter uses Redis token-bucket algorithm:
+      #   replenishRate  = tokens added per second (steady-state limit)
+      #   burstCapacity  = max tokens in bucket (allows short bursts above steady rate)
+      #   requestedTokens = tokens consumed per request (always 1 for uniform cost)
+      #
+      # Result: 10 req/s sustained, burst up to 20 req/s. 429 when bucket empty.
+      # Key = client IP (see RateLimiterConfig.ipKeyResolver).
+      default-filters:
+        - name: RequestRateLimiter
+          args:
+            redis-rate-limiter.replenishRate: 10
+            redis-rate-limiter.burstCapacity: 20
+            redis-rate-limiter.requestedTokens: 1
+            key-resolver: "#{@ipKeyResolver}"
+
       routes:
 
         # ------------------------------------------------------------------ #
@@ -119,6 +134,11 @@ spring:
           filters:
             - StripPrefix=1
 
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: 6379
+
   # Graceful shutdown: when the process receives SIGTERM, Spring stops accepting
   # new requests immediately but waits up to 25 s for in-flight requests to
   # complete before the JVM exits. Without this, a rolling deploy kills active
@@ -147,7 +167,7 @@ management:
   endpoints:
     web:
       exposure:
-        include: health, info, gateway
+        include: health, info, gateway, prometheus
   endpoint:
     health:
       show-details: always
@@ -162,6 +182,9 @@ management:
       enabled: true
     readinessState:
       enabled: true
+  tracing:
+    sampling:
+      probability: 1.0
 
 # Gateway has no API of its own — services provide their own Swagger UIs.
 # Disabling here prevents a confusing empty spec at /api-docs.
@@ -171,28 +194,13 @@ springdoc:
   swagger-ui:
     enabled: false
 
-# --- DEFERRED: add when infrastructure is ready ----------------------------- #
-#
-# Rate limiting (needs Redis):
-#   spring.data.redis.host / port
-#   Add RequestRateLimiter filter per route
-#
-# Distributed tracing (needs Zipkin container in docker-compose):
-#   management.tracing.sampling.probability: 1.0
-#   management.zipkin.tracing.endpoint: http://zipkin:9411/api/v2/spans
-#
-# Prometheus metrics (needs Prometheus container + micrometer-registry-prometheus):
-#   management.endpoints.web.exposure.include: health, info, gateway, prometheus
-#   management.metrics.export.prometheus.enabled: true
-#
-# JWT validation filter (needs auth-service or shared secret):
-#   Add a custom GlobalFilter that validates Authorization header
-# --------------------------------------------------------------------------- #
-
 # JWT — used by JwtAuthenticationFilter to verify incoming tokens.
 # Must match the jwt.secret configured in auth-service (same shared key).
 jwt:
   secret: ${JWT_SECRET:bXliYW5raW5nc2VjcmV0a2V5Zm9ySldUYXV0aFBoYXNlNDEyMzQ1Njc4OTA=}
+
+spring.zipkin:
+  base-url: http://${ZIPKIN_HOST:localhost}:9411
 
 logging:
   pattern:

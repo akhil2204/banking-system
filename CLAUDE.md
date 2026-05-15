@@ -29,9 +29,7 @@ Instead of:                          → Say instead:
 
 ### Phase decomposition (how to break up future phases)
 Each line below = one session:
-- Phase 6a: add Zipkin to one service, validate it works, then repeat per service
-- Phase 6b: add Prometheus to one service at a time
-- Phase 7: write integration tests for one service at a time
+- Phase 8: write integration tests for one service at a time
 - Documentation rewrites: always a standalone session with no implementation
 
 ---
@@ -42,6 +40,9 @@ Each line below = one session:
 - Docker Compose for all local infrastructure
 - RabbitMQ 3.x — async notification delivery (transaction-service → notification-service)
 - Kafka 3.7 KRaft — audit event streaming (transaction-service + account-service → audit-service)
+- Redis 7 — distributed rate limiting via Spring Cloud Gateway RequestRateLimiter (token bucket)
+- Zipkin — distributed tracing (micrometer-tracing-bridge-brave, 100% sampling)
+- Prometheus + Grafana — metrics scraping and dashboards
 
 ## Architecture rules — never break these
 - Each service owns its own database schema. Never cross-query between service DBs.
@@ -80,6 +81,10 @@ Each line below = one session:
 | RabbitMQ AMQP | 5672 |
 | RabbitMQ Management UI | 15672 |
 | Kafka | 9092 |
+| Redis | 6379 |
+| Zipkin | 9411 |
+| Prometheus | 9090 |
+| Grafana | 3000 |
 
 ---
 
@@ -120,7 +125,7 @@ Key patterns introduced:
 - Producer catches publish failures silently; consumer rethrows so broker handles retry/DLQ
 
 ### Phase 5b — Audit Event Streaming via Kafka ✓
-- Kafka (KRaft, bitnami/kafka:3.7) added to Docker Compose — no Zookeeper needed
+- Kafka (KRaft, apache/kafka:3.7.0) added to Docker Compose — no Zookeeper needed
 - transaction-service: publishes `TransactionAuditEvent` to topic `banking.audit.transactions`
 - account-service: publishes `AccountAuditEvent` to topic `banking.audit.accounts`
 - New **audit-service** (port 8086, DB: banking_audit, postgres-audit:5438)
@@ -138,11 +143,58 @@ Key patterns introduced:
 - Payload column stores full raw JSON → complete, immutable audit snapshot per event
 - `occurredAt` (business time) vs `receivedAt` (processing time) — gap = end-to-end latency
 
-### Current build status
-All 5 phases (5a + 5b) complete. 8 services running. Full system documentation at SYSTEM_DOCUMENTATION.md.
+### Phase 6 — Distributed Tracing via Zipkin ✓
+- Zipkin container added to Docker Compose (port 9411)
+- All 7 services: `micrometer-tracing-bridge-brave` + `zipkin-reporter-brave` added to pom.xml
+- All 7 services: `management.tracing.sampling.probability: 1.0` + `spring.zipkin.base-url` in application.yml
+- Traces visible at http://localhost:9411 — cross-service request flows linked by trace ID
+- `ZIPKIN_HOST` env var controls host in Docker Compose; defaults to `localhost` for local dev
 
-### TODO
-- (all core services built — see next steps below)
+Key patterns introduced:
+- Micrometer tracing auto-instruments Spring WebMVC, Feign, Kafka, RabbitMQ — zero manual span creation needed
+- 100% sampling (`probability: 1.0`) for dev; reduce to 0.1 in production to limit volume
+- Trace propagation via `traceparent` W3C header (injected by Brave, read by downstream services)
+- Each Feign call appears as a child span under the parent HTTP span — full call chain visible
+
+### Phase 7 — Metrics with Prometheus + Grafana ✓
+- Prometheus container added (port 9090, mounts ./prometheus.yml)
+- Grafana container added (port 3000, admin/admin, mounts ./grafana/provisioning)
+- All 7 services: `micrometer-registry-prometheus` added to pom.xml
+- All 7 services: `/actuator/prometheus` endpoint exposed in application.yml
+- `prometheus.yml` at project root — scrapes all 7 services every 15s
+- Grafana auto-provisioned with Prometheus datasource via `grafana/provisioning/datasources/prometheus.yml`
+- Grafana dashboard provider configured via `grafana/provisioning/dashboards/dashboard.yml`
+
+Recommended dashboard IDs to import in Grafana:
+- **4701** — JVM Micrometer (heap, GC, threads per service)
+- **11378** — Spring Boot 3.x (HTTP request rates, error rates, latency percentiles)
+- **6417** — Spring Cloud Gateway (route metrics, rate limiter hits)
+
+Key patterns introduced:
+- Prometheus pull model — Prometheus scrapes `/actuator/prometheus`; services push nothing
+- All Spring Boot metrics auto-exposed: HTTP, JVM, HikariCP pool, Kafka consumer lag
+- `prometheus_data` and `grafana_data` named volumes — dashboards persist across restarts
+
+### Phase 8 — Redis Rate Limiting ✓
+- Redis container added (port 6379, `redis:7-alpine`)
+- api-gateway: `spring-boot-starter-data-redis-reactive` added to pom.xml
+- api-gateway: `RequestRateLimiter` added as global default filter:
+  - `replenishRate: 10` — 10 tokens/second refill (steady-state limit)
+  - `burstCapacity: 20` — bucket holds up to 20 tokens (allows short bursts)
+  - `requestedTokens: 1` — each request costs 1 token
+  - Key: client IP address (`ipKeyResolver` bean in `RateLimiterConfig.java`)
+- Returns HTTP 429 when bucket empty; Redis stores bucket state — works across multiple gateway instances
+
+Key patterns introduced:
+- Token bucket algorithm: bucket fills at replenishRate, drains as requests arrive, caps at burstCapacity
+- Redis stores per-IP state — distributes correctly when api-gateway is horizontally scaled
+- Reactive Redis driver (Lettuce) required — gateway is WebFlux, never use blocking `spring-data-redis`
+- `REDIS_HOST` env var controls host; defaults to `localhost` for local dev
+- In production behind reverse proxy: replace IP key with `X-Forwarded-For` header
+
+### Current build status
+All 8 phases complete. 8 application services + 12 infrastructure containers running.
+Full system documentation at SYSTEM_DOCUMENTATION.md.
 
 ---
 
@@ -176,16 +228,23 @@ eureka:
     instance-id: ${spring.application.name}:${server.port}
 ```
 
-**Actuator (minimum):**
+**Actuator + observability (full standard block):**
 ```yaml
 management:
   endpoints:
     web:
       exposure:
-        include: health
+        include: health, prometheus
   endpoint:
     health:
       show-details: always
+  tracing:
+    sampling:
+      probability: 1.0
+
+spring:
+  zipkin:
+    base-url: http://${ZIPKIN_HOST:localhost}:9411
 ```
 
 **Graceful shutdown:**
@@ -209,6 +268,10 @@ lombok (optional)
 springdoc-openapi-starter-webmvc-ui 2.8.6
 spring-cloud-starter-openfeign       ← for services that call other services
 spring-boot-starter-test (test)
+<!-- Observability — required for all services -->
+micrometer-tracing-bridge-brave
+zipkin-reporter-brave
+micrometer-registry-prometheus
 ```
 
 ### Feign client pattern (account-service needs this to call user-service)
@@ -270,16 +333,20 @@ Dashboard: http://localhost:8761
 - Graceful shutdown (25s), response compression, liveness/readiness probes
 - Live routes: http://localhost:8080/actuator/gateway/routes
 
-**JWT GlobalFilter (Phase 4 — done):**
+**JWT GlobalFilter:**
 - Validates Bearer token on every incoming request before routing
 - Public paths (`/v1/auth/**`) are whitelisted and bypass the filter
 - Returns 401 if token is missing, expired, or invalid
 - On success, forwards `X-User-Id`, `X-User-Email`, `X-User-Role` headers downstream
 
-**Deferred (infrastructure not yet added):**
-- Rate limiting → needs Redis
-- Distributed tracing → needs Zipkin
-- Prometheus metrics → needs micrometer-registry-prometheus + Prometheus container
+**Rate Limiting:**
+- Redis token bucket: 10 req/s sustained, burst up to 20 req/s, keyed by client IP
+- Returns 429 when bucket empty; state stored in Redis (works across gateway replicas)
+- `RateLimiterConfig.java` in `config/` package — `ipKeyResolver` bean
+
+**Observability:**
+- Zipkin tracing: 100% sampling, traces at http://localhost:9411
+- Prometheus metrics: `/actuator/prometheus`, scraped by Prometheus at port 9090
 
 ### account-service ✓
 **Port:** 8082 | **DB:** banking_accounts (postgres-accounts:5434)
@@ -425,23 +492,38 @@ Key patterns:
 | auth-service | ./auth-service | 8085 |
 | postgres-audit | postgres:16-alpine | 5438→5432 |
 | audit-service | ./audit-service | 8086 |
-| rabbitmq | rabbitmq:3-management | 5672, 15672 |
-| kafka | bitnami/kafka:3.7 | 9092 |
+| rabbitmq | rabbitmq:3.13-management-alpine | 5672, 15672 |
+| kafka | apache/kafka:3.7.0 | 9092 |
+| redis | redis:7-alpine | 6379 |
+| zipkin | openzipkin/zipkin:3 | 9411 |
+| prometheus | prom/prometheus:v2.51.0 | 9090 |
+| grafana | grafana/grafana:10.4.0 | 3000 |
 
 ---
 
 ## Suggested next steps (choose based on goals)
 
-### Production hardening
-- **Flyway migrations** ✓ — all 6 DB services have V1__init.sql; ddl-auto: validate
-- **Circuit breaker (Resilience4j)** ✓ — account-service (UserClient), transaction-service (AccountClient)
-- **JWT auth** ✓ — auth-service issues tokens; api-gateway GlobalFilter validates every request
-- **Integration tests** — `@SpringBootTest` + Testcontainers (spins up real PostgreSQL in Docker for tests)
+### All core phases complete ✓
+- Foundation (Eureka, Gateway, user-service) ✓
+- Core banking (account-service, transaction-service) ✓
+- Reliability (Flyway, Circuit breakers, notification-service) ✓
+- Security (auth-service, JWT gateway filter) ✓
+- Async messaging (RabbitMQ notifications, Kafka audit) ✓
+- Distributed tracing (Zipkin) ✓
+- Metrics (Prometheus + Grafana) ✓
+- Rate limiting (Redis token bucket) ✓
 
-### Observability
-- **Distributed tracing** — add Zipkin container + `micrometer-tracing-bridge-brave` to each service
-- **Prometheus + Grafana** — add `micrometer-registry-prometheus`; dashboards for request rates, error rates, latency
+### Next: Integration tests
+- `@SpringBootTest` + Testcontainers — spins up real PostgreSQL in Docker for tests
+- Test one service per session: "write integration tests for user-service"
+- Test the full HTTP layer with `MockMvc` or `WebTestClient` (gateway uses WebFlux)
+- Kafka/RabbitMQ consumers: use embedded broker or Testcontainers
 
-### Reliability
-- **Async notifications via RabbitMQ** ✓ — transaction-service publishes events; notification-service consumes; fully decoupled
-- **Async audit via Kafka** ✓ — audit-service (port 8086) consumes Kafka topics from transaction-service and account-service; immutable audit log with replay capability
+### Future hardening (production readiness)
+- **HTTPS/TLS** — terminate at gateway with SSL certificate (Let's Encrypt or internal CA)
+- **Secrets management** — move JWT_SECRET, DB passwords out of docker-compose env vars into Vault or K8s secrets
+- **Retry with backoff** — add `@Retryable` or Resilience4j Retry to Feign calls for transient failures
+- **Kubernetes** — convert docker-compose to Helm charts; liveness/readiness probes already wired
+- **CI/CD** — GitHub Actions: build → test → docker build → push to registry → deploy
+- **API versioning** — add v2 routes to gateway pointing to v2 service variants; v1 stays untouched
+- **Rate limiting by user** — replace IP key resolver with JWT subject (userId) from X-User-Id header

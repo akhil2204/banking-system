@@ -89,6 +89,19 @@
             <groupId>io.zipkin.reporter2</groupId>
             <artifactId>zipkin-reporter-brave</artifactId>
         </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+        <!--
+            Reactive Redis client — required by Spring Cloud Gateway's
+            RequestRateLimiter filter. The gateway stack is WebFlux (reactive),
+            so we need the reactive (Lettuce) driver, not spring-data-redis.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis-reactive</artifactId>
+        </dependency>
     </dependencies>
 
     <build>

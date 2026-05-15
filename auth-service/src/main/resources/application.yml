@@ -48,10 +48,13 @@ management:
   endpoints:
     web:
       exposure:
-        include: health
+        include: health, prometheus
   endpoint:
     health:
       show-details: always
+  tracing:
+    sampling:
+      probability: 1.0
 
 # JWT configuration — shared secret between auth-service (signs) and api-gateway (verifies).
 # In production this MUST be a cryptographically random value injected via a secrets manager.
@@ -81,6 +84,9 @@ feign:
         logger-level: BASIC
         connect-timeout: 5000
         read-timeout: 5000
+
+spring.zipkin:
+  base-url: http://${ZIPKIN_HOST:localhost}:9411
 
 logging:
   level:

@@ -84,17 +84,24 @@ resilience4j:
         ignore-exceptions:
           - feign.FeignException.NotFound
           - feign.FeignException.BadRequest
+
 management:
   endpoints:
     web:
       exposure:
-        include: health
+        include: health, prometheus
   endpoint:
     health:
       show-details: always
   health:
     circuitbreakers:
       enabled: true
+  tracing:
+    sampling:
+      probability: 1.0
+
+spring.zipkin:
+  base-url: http://${ZIPKIN_HOST:localhost}:9411
 
 logging:
   level:
